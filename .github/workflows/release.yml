@@ -1,8 +1,8 @@
 name: Release
 
-# Builds redistributable artifacts for Windows, Linux, and macOS, and
-# attaches them to a GitHub release. Triggered by pushing a tag like
-# `v0.1.0`, or manually via workflow_dispatch for test builds.
+# Builds redistributable artifacts for Windows (Linux/macOS disabled for
+# now) and attaches them to a GitHub release. Triggered by pushing a tag
+# like `v0.1.0`, or manually via workflow_dispatch for test builds.
 on:
   push:
     tags:
@@ -20,29 +20,9 @@ jobs:
             build-preset: windows-x64-release
             artifact-name: opente-game-windows-x64
             binary-dir: game/build/windows-x64/bin
-          - os: ubuntu-latest
-            preset: linux-ninja
-            build-preset: linux-ninja
-            artifact-name: opente-game-linux-x64
-            binary-dir: game/build/linux-ninja/bin
-          - os: macos-latest
-            preset: macos-ninja
-            build-preset: macos-ninja
-            artifact-name: opente-game-macos-arm64
-            binary-dir: game/build/macos-ninja/bin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Ninja
-        if: runner.os != 'Windows'
-        uses: seanmiddleditch/gha-setup-ninja@master
-
-      - name: Install Linux SDL2 build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential nasm libltdl-dev
 
       - name: Set up vcpkg
         uses: lukka/run-vcpkg@v11
@@ -75,12 +55,6 @@ jobs:
           - os: windows-latest
             artifact-name: opente-extract-windows-x64
             binary-name: opente-extract.exe
-          - os: ubuntu-latest
-            artifact-name: opente-extract-linux-x64
-            binary-name: opente-extract
-          - os: macos-latest
-            artifact-name: opente-extract-macos-arm64
-            binary-name: opente-extract
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -115,7 +89,7 @@ jobs:
       - name: Package per-platform bundles
         run: |
           set -eu
-          for platform_arch in windows-x64 linux-x64 macos-arm64; do
+          for platform_arch in windows-x64; do
             bundle="opente-${platform_arch}"
             mkdir -p "$bundle"
             cp -r "artifacts/opente-game-${platform_arch}/." "$bundle/"

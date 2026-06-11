@@ -14,25 +14,9 @@ jobs:
           - os: windows-latest
             preset: windows-x64
             build-preset: windows-x64-debug
-          - os: ubuntu-latest
-            preset: linux-ninja
-            build-preset: linux-ninja
-          - os: macos-latest
-            preset: macos-ninja
-            build-preset: macos-ninja
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Ninja
-        if: runner.os != 'Windows'
-        uses: seanmiddleditch/gha-setup-ninja@master
-
-      - name: Install Linux SDL2 build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential nasm libltdl-dev
 
       - name: Set up vcpkg
         uses: lukka/run-vcpkg@v11
