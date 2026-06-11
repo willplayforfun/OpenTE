@@ -2,8 +2,11 @@
 
 #include <SDL.h>
 
+#include <array>
 #include <filesystem>
+#include <map>
 #include <optional>
+#include <string>
 
 #include "data/registry.h"
 #include "render/camera.h"
@@ -36,8 +39,18 @@ private:
     void render();
 
     void render_terrain();
+    void render_terrain_edges();
     void render_decorations();
     void render_buildings();
+
+    /// A loaded sprite plus the (pixel) anchor offset from its placement
+    /// point to its top-left corner, as decoded from the original sprite
+    /// leaf (`data::SpriteEntry::anchor_x/anchor_y`).
+    struct AnchoredSprite {
+        render::Texture texture;
+        float anchor_x = 0.0f;
+        float anchor_y = 0.0f;
+    };
 
     SDL_Window* window_ = nullptr;
     SDL_Renderer* renderer_ = nullptr;
@@ -46,6 +59,15 @@ private:
     std::optional<world::World> world_;
     render::Camera camera_;
     render::Texture hq_sprite_;
+
+    /// Per-`world::TerrainType` tile textures, indexed by the enum's
+    /// underlying value (see `core/app.cpp`'s `kTerrainTextureIds`).
+    std::array<render::Texture, 7> terrain_textures_;
+    render::Texture terrain_edge_texture_;
+
+    /// Ground-decoration sprites, keyed by `data::SpriteEntry::id`
+    /// (e.g. "flor.chin.3").
+    std::map<std::string, AnchoredSprite> decoration_sprites_;
 
     bool running_ = false;
 

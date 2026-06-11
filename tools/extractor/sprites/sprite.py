@@ -31,6 +31,11 @@ _PALETTE_NUM_COLORS = 512
 
 _TRANSPARENT_KEY_RGB = (255, 0, 255)  # DirectDraw magenta colour-key
 
+# 8bpp palette-indexed sprite rows (bpp==1, field3==19) are stored rotated
+# left by this many pixels: the leftmost _ROW_WRAP columns of raw pixel data
+# for a row actually belong at the right edge of that row. See _decode_raw().
+_ROW_WRAP = 4
+
 
 @dataclass
 class DecodedSprite:
@@ -51,6 +56,11 @@ def _decode_raw(blob: bytes) -> tuple[int, int, int, int, bytes, int, int, int] 
     finding the byte width (1, 2, 3, or 4) for which the trailing slack
     `len(blob) - 32 - width*height*bpp` falls in [0, 16]; `field3 == 1`
     forces bpp == 2 (16-bit direct colour).
+
+    For 8bpp palette-indexed sprites (bpp==1, field3==19 -- buildings,
+    trees, etc.), each row is stored rotated left by `_ROW_WRAP` (4) pixels
+    relative to the displayed image, so `pixels` is un-rotated row-by-row
+    before being returned.
     """
     if len(blob) < _HEADER_SIZE:
         return None
@@ -76,6 +86,15 @@ def _decode_raw(blob: bytes) -> tuple[int, int, int, int, bytes, int, int, int] 
 
     pixel_bytes = num_pixels * bpp
     pixels = blob[_HEADER_SIZE:_HEADER_SIZE + pixel_bytes]
+    if bpp == 1 and field3 == 19 and width > _ROW_WRAP:
+        # Each row is stored rotated left by _ROW_WRAP pixels: the first
+        # _ROW_WRAP columns of raw pixel data actually belong at the right
+        # edge of the row. Un-rotate so column 0 is the true left edge.
+        unrotated = bytearray(pixel_bytes)
+        for y in range(height):
+            row = pixels[y * width:(y + 1) * width]
+            unrotated[y * width:(y + 1) * width] = row[_ROW_WRAP:] + row[:_ROW_WRAP]
+        pixels = bytes(unrotated)
     return width, height, anchor_x, anchor_y, pixels, field3, str_rel, bpp
 
 
@@ -138,6 +157,17 @@ def _colorize_16bpp(pixels: bytes, fmt: str) -> bytes:
     return bytes(rgba)
 
 
+# Palette indices 0-7 (`colours[256+0]` .. `colours[256+7]`) are a fixed
+# "rainbow ramp" (magenta, cyan, yellow, green, two reds, ...) present
+# verbatim in every `ap01` palette observed (e.g. `bldg.cher.cbaz` and
+# `bldg.chi1.head`). Index 0 is the DirectDraw magenta colour-key and is
+# already transparent via the colour-match below; 1-7 are anti-aliasing/
+# edge-blend placeholder markers that were never replaced with real colours
+# -- rendering them produces the red/green pixel fringes and stripes seen on
+# extracted building sprites, so treat the whole 0-7 range as transparent.
+_PLACEHOLDER_RAMP_MAX_INDEX = 7
+
+
 def _colorize_paletted(pixels: bytes, palette: list[int]) -> bytes:
     rgba = bytearray(len(pixels) * 4)
     cache: dict[int, tuple[int, int, int, int]] = {}
@@ -145,8 +175,8 @@ def _colorize_paletted(pixels: bytes, palette: list[int]) -> bytes:
         colour = cache.get(p)
         if colour is None:
             rgb = _rgb565_to_rgb(palette[256 + p])
-            alpha = 0 if rgb == _TRANSPARENT_KEY_RGB else 255
-            colour = (*rgb, alpha)
+            transparent = p <= _PLACEHOLDER_RAMP_MAX_INDEX or rgb == _TRANSPARENT_KEY_RGB
+            colour = (*rgb, 0 if transparent else 255)
             cache[p] = colour
         rgba[i * 4:i * 4 + 4] = bytes(colour)
     return bytes(rgba)

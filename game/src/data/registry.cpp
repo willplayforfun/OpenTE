@@ -16,6 +16,8 @@ void from_json(const nlohmann::json& j, SpriteEntry& s) {
     s.file = j.value("file", "");
     s.width = j.value("width", 0);
     s.height = j.value("height", 0);
+    s.anchor_x = j.value("anchor_x", 0);
+    s.anchor_y = j.value("anchor_y", 0);
 }
 
 void from_json(const nlohmann::json& j, TableEntry& t) {

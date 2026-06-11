@@ -156,10 +156,13 @@ def extract_map(
         x, y = _decode_loca(map_data, child.dir.offset, fields)
 
         if elem_type == "flop":
+            culture = fields["cult"].value
+            decoration_id = fields["spec"].value
             decorations.append({
                 "type": "flop",
-                "culture": fields["cult"].value,
-                "decoration_id": fields["spec"].value,
+                "culture": culture,
+                "decoration_id": decoration_id,
+                "sprite": f"flor.{culture}.{decoration_id}",
                 "x": x,
                 "y": y,
             })

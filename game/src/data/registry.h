@@ -25,6 +25,8 @@ struct SpriteEntry {
     std::string file;
     int width = 0;
     int height = 0;
+    int anchor_x = 0;
+    int anchor_y = 0;
 };
 
 struct TableEntry {

@@ -43,6 +43,7 @@ struct Decoration {
     std::string type;
     std::string culture;
     int decoration_id = 0;
+    std::string sprite;
     double x = 0;
     double y = 0;
 };
@@ -51,6 +52,7 @@ inline void from_json(const nlohmann::json& j, Decoration& d) {
     d.type = j.value("type", "");
     d.culture = j.value("culture", "");
     d.decoration_id = j.value("decoration_id", 0);
+    d.sprite = j.value("sprite", "");
     d.x = j.value("x", 0.0);
     d.y = j.value("y", 0.0);
 }

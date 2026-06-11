@@ -27,7 +27,9 @@ from .game_directory import GameDirectory, find_game_directory
 from .manifest import Manifest, MapEntry, SpriteEntry, TableEntry, write_manifest
 from .maps.region import extract_map
 from .sprites.buildings import find_building_sprite_path
+from .sprites.decorations import extract_decoration_sprites
 from .sprites.sprite import decode_sprite, find_leaf, write_png_rgba
+from .sprites.terrain import extract_terrain_textures
 from .tables.abilities import extract_abilities
 from .tables.bandits import extract_bandits
 from .tables.buildings import extract_buildings
@@ -127,7 +129,8 @@ def _extract_building_sprite(bldg_data: bytes, bldg_root: DirNode, buildings: di
     write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, sprite.rgba)
 
     return SpriteEntry(id=sprite_id, file=str(relative_path).replace("\\", "/"),
-                        width=sprite.width, height=sprite.height)
+                        width=sprite.width, height=sprite.height,
+                        anchor_x=sprite.anchor_x, anchor_y=sprite.anchor_y)
 
 
 def _extract_maps(game_dir: GameDirectory, data_data: bytes, data_root: DirNode,
@@ -181,6 +184,15 @@ def run(game_dir: GameDirectory, output_dir: Path) -> None:
 
     map_entries, sprite_entries = _extract_maps(game_dir, data_data, data_root, bldg_data, bldg_root,
                                                   tables["buildings"], tables["episodes"], output_dir)
+
+    m_ui_data, m_ui_footer = load(game_dir.data_dir / "m_ui,u.{}")
+    m_ui_root = parse_tree(m_ui_data, m_ui_footer)
+    sprite_entries += extract_terrain_textures(m_ui_data, m_ui_root, output_dir)
+
+    flor_data, flor_footer = load(game_dir.data_dir / "flor.{}")
+    flor_root = parse_tree(flor_data, flor_footer)
+    sprite_entries += extract_decoration_sprites(flor_data, flor_root, output_dir)
+
     for entry in map_entries:
         print(f"  wrote map '{entry.id}' -> {entry.file}")
     for entry in sprite_entries:

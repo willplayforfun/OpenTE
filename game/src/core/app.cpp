@@ -6,7 +6,6 @@
 #include <array>
 #include <cstddef>
 #include <iostream>
-#include <vector>
 
 #include "core/paths.h"
 #include "render/iso.h"
@@ -27,25 +26,24 @@ constexpr float kZoomStep = 0.1f;
 constexpr const char* kStartMapId = "ep01_china";
 constexpr const char* kHqSpriteId = "bldg.chi1.head";
 
-/// Flat tile colors for `world::TerrainType`, indexed by the enum's
-/// underlying value. Placeholder until real terrain tile sprites are
-/// extracted (see implementation/roadmap.md Stage 2+).
-constexpr std::array<SDL_Color, 7> kTerrainColors = {{
-    {40, 70, 140, 255},    // DeepWater
-    {80, 130, 200, 255},   // ShallowWater
-    {100, 170, 80, 255},   // Plains
-    {140, 160, 80, 255},   // Hills
-    {130, 120, 110, 255},  // Mountains
-    {210, 190, 120, 255},  // Desert
-    {50, 110, 60, 255},    // Forest
+/// `game_data` sprite ids for the per-`world::TerrainType` tile textures
+/// (see `tools/extractor/sprites/terrain.py`), indexed by the enum's
+/// underlying value.
+constexpr std::array<const char*, 7> kTerrainTextureIds = {{
+    "terrain.deep_water",
+    "terrain.shallow_water",
+    "terrain.plains",
+    "terrain.hills",
+    "terrain.mountains",
+    "terrain.desert",
+    "terrain.forest",
 }};
 
-constexpr SDL_Color kDecorationColor{170, 130, 70, 255};
+constexpr const char* kTerrainEdgeTextureId = "terrain.edge";
 
-SDL_Color terrain_color(world::TerrainType type) {
-    const auto index = static_cast<std::size_t>(type);
-    return index < kTerrainColors.size() ? kTerrainColors[index] : SDL_Color{255, 0, 255, 255};
-}
+/// Sprite ids for ground-decoration sprites (see
+/// `tools/extractor/sprites/decorations.py`) all share this prefix.
+constexpr const char* kDecorationSpritePrefix = "flor.";
 
 }  // namespace
 
@@ -98,7 +96,27 @@ bool App::init(const std::filesystem::path& executable_path) {
     for (const data::SpriteEntry& sprite : registry_->manifest().sprites) {
         if (sprite.id == kHqSpriteId) {
             hq_sprite_ = render::Texture::load(renderer_, *game_data_dir / sprite.file);
-            break;
+            continue;
+        }
+
+        if (sprite.id == kTerrainEdgeTextureId) {
+            terrain_edge_texture_ = render::Texture::load(renderer_, *game_data_dir / sprite.file);
+            continue;
+        }
+
+        const auto terrain_it = std::find(kTerrainTextureIds.begin(), kTerrainTextureIds.end(), sprite.id);
+        if (terrain_it != kTerrainTextureIds.end()) {
+            const auto index = static_cast<std::size_t>(terrain_it - kTerrainTextureIds.begin());
+            terrain_textures_[index] = render::Texture::load(renderer_, *game_data_dir / sprite.file);
+            continue;
+        }
+
+        if (sprite.id.rfind(kDecorationSpritePrefix, 0) == 0) {
+            AnchoredSprite anchored;
+            anchored.texture = render::Texture::load(renderer_, *game_data_dir / sprite.file);
+            anchored.anchor_x = static_cast<float>(sprite.anchor_x);
+            anchored.anchor_y = static_cast<float>(sprite.anchor_y);
+            decoration_sprites_.emplace(sprite.id, std::move(anchored));
         }
     }
 
@@ -211,56 +229,77 @@ void App::render() {
 void App::render_terrain() {
     const world::Region& region = world_->region();
 
-    std::vector<SDL_Vertex> vertices;
-    std::vector<int> indices;
-    vertices.reserve(static_cast<std::size_t>(region.width()) * region.height() * 4);
-    indices.reserve(static_cast<std::size_t>(region.width()) * region.height() * 6);
+    const float tile_w = render::kTileWidth * camera_.zoom;
+    const float tile_h = render::kTileHeight * camera_.zoom;
 
     for (int ty = 0; ty < region.height(); ++ty) {
         for (int tx = 0; tx < region.width(); ++tx) {
-            const SDL_Color color = terrain_color(region.terrain_at(tx, ty));
+            const auto index = static_cast<std::size_t>(region.terrain_at(tx, ty));
+            const render::Texture& texture = terrain_textures_[index];
+            if (!texture.valid()) {
+                continue;
+            }
 
-            // Diamond corners for tile (tx, ty): north/east/south/west, per
-            // the iso projection in render/iso.h.
+            // Tile (tx, ty)'s diamond spans from its "north" corner (the
+            // top point, per render/iso.h) down kTileHeight and from
+            // kTileWidth/2 left of it to kTileWidth/2 right of it.
             const render::Vec2 north = render::tile_to_world(static_cast<float>(tx), static_cast<float>(ty));
-            const render::Vec2 east = render::tile_to_world(static_cast<float>(tx + 1), static_cast<float>(ty));
-            const render::Vec2 south =
-                render::tile_to_world(static_cast<float>(tx + 1), static_cast<float>(ty + 1));
-            const render::Vec2 west = render::tile_to_world(static_cast<float>(tx), static_cast<float>(ty + 1));
+            const render::Vec2 top_left =
+                camera_.world_to_screen({north.x - render::kTileWidth / 2.0f, north.y});
 
-            const render::Vec2 north_s = camera_.world_to_screen(north);
-            const render::Vec2 east_s = camera_.world_to_screen(east);
-            const render::Vec2 south_s = camera_.world_to_screen(south);
-            const render::Vec2 west_s = camera_.world_to_screen(west);
-
-            const int base = static_cast<int>(vertices.size());
-            vertices.push_back(SDL_Vertex{{north_s.x, north_s.y}, color, {0, 0}});
-            vertices.push_back(SDL_Vertex{{east_s.x, east_s.y}, color, {0, 0}});
-            vertices.push_back(SDL_Vertex{{south_s.x, south_s.y}, color, {0, 0}});
-            vertices.push_back(SDL_Vertex{{west_s.x, west_s.y}, color, {0, 0}});
-
-            indices.insert(indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+            const SDL_FRect dest{top_left.x, top_left.y, tile_w, tile_h};
+            SDL_RenderCopyF(renderer_, texture.handle(), nullptr, &dest);
         }
     }
 
-    SDL_RenderGeometry(renderer_, nullptr, vertices.data(), static_cast<int>(vertices.size()), indices.data(),
-                        static_cast<int>(indices.size()));
+    render_terrain_edges();
+}
+
+void App::render_terrain_edges() {
+    if (!terrain_edge_texture_.valid()) {
+        return;
+    }
+
+    const world::Region& region = world_->region();
+    const float tile_w = render::kTileWidth * camera_.zoom;
+    const float tile_h = render::kTileHeight * camera_.zoom;
+
+    // Draw a row of "skirt" tiles directly below the map's south and east
+    // border tiles, using the vertical rock/cliff texture (terrain.edge),
+    // approximating the original game's map-edge rendering.
+    auto draw_skirt = [&](int tx, int ty) {
+        const render::Vec2 north = render::tile_to_world(static_cast<float>(tx), static_cast<float>(ty));
+        const render::Vec2 top_left =
+            camera_.world_to_screen({north.x - render::kTileWidth / 2.0f, north.y + render::kTileHeight});
+        const SDL_FRect dest{top_left.x, top_left.y, tile_w, tile_h};
+        SDL_RenderCopyF(renderer_, terrain_edge_texture_.handle(), nullptr, &dest);
+    };
+
+    for (int tx = 0; tx < region.width(); ++tx) {
+        draw_skirt(tx, region.height() - 1);
+    }
+    for (int ty = 0; ty < region.height(); ++ty) {
+        draw_skirt(region.width() - 1, ty);
+    }
 }
 
 void App::render_decorations() {
-    constexpr float kMarkerSize = 8.0f;
-
-    SDL_SetRenderDrawColor(renderer_, kDecorationColor.r, kDecorationColor.g, kDecorationColor.b,
-                            kDecorationColor.a);
-
     for (const world::Decoration& decoration : world_->region().decorations()) {
+        const auto it = decoration_sprites_.find(decoration.sprite);
+        if (it == decoration_sprites_.end() || !it->second.texture.valid()) {
+            continue;
+        }
+        const AnchoredSprite& sprite = it->second;
+
         const render::Vec2 world_pos =
             render::tile_to_world(static_cast<float>(decoration.x), static_cast<float>(decoration.y));
         const render::Vec2 screen_pos = camera_.world_to_screen(world_pos);
 
-        const float size = kMarkerSize * camera_.zoom;
-        const SDL_FRect rect{screen_pos.x - size / 2.0f, screen_pos.y - size / 2.0f, size, size};
-        SDL_RenderFillRectF(renderer_, &rect);
+        const float w = sprite.texture.width() * camera_.zoom;
+        const float h = sprite.texture.height() * camera_.zoom;
+        const SDL_FRect dest{screen_pos.x + sprite.anchor_x * camera_.zoom,
+                              screen_pos.y + sprite.anchor_y * camera_.zoom, w, h};
+        SDL_RenderCopyF(renderer_, sprite.texture.handle(), nullptr, &dest);
     }
 }
 

@@ -19,12 +19,19 @@ FORMAT_VERSION = 1
 class SpriteEntry:
     """One sprite asset, referenced by `id` (its source path in the
     original container, dotted, e.g. "bldg.cher.cbaz") and `file` (its PNG
-    path relative to `game_data/`)."""
+    path relative to `game_data/`).
+
+    `anchor_x`/`anchor_y` are the sprite leaf's anchor offsets (pixels from
+    the sprite's top-left corner to its placement point, e.g. the tile
+    origin), as decoded by `sprites.sprite.decode_sprite`. Default to 0 for
+    assets (terrain tiles) that don't have a meaningful anchor."""
 
     id: str
     file: str
     width: int
     height: int
+    anchor_x: int = 0
+    anchor_y: int = 0
 
 
 @dataclass
