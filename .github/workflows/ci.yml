@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-game:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            preset: windows-x64
+            build-preset: windows-x64-debug
+          - os: ubuntu-latest
+            preset: linux-ninja
+            build-preset: linux-ninja
+          - os: macos-latest
+            preset: macos-ninja
+            build-preset: macos-ninja
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        if: runner.os != 'Windows'
+        uses: seanmiddleditch/gha-setup-ninja@master
+
+      - name: Install Linux SDL2 build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm libltdl-dev
+
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: '${{ github.workspace }}/vcpkg'
+
+      - name: Configure
+        working-directory: game
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        working-directory: game
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: cmake --build --preset ${{ matrix.build-preset }}
+
+  check-extractor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile-check extractor sources
+        working-directory: tools
+        run: python -m compileall extractor

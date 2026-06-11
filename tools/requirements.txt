@@ -1,0 +1,5 @@
+# The extractor itself uses only the Python standard library.
+# PyInstaller is needed to build the standalone extractor executable
+# distributed in OpenTE releases (see pyproject.toml and
+# .github/workflows/release.yml).
+pyinstaller>=6.0

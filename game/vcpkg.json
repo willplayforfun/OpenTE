@@ -1,0 +1,11 @@
+{
+  "name": "opente",
+  "version": "0.1.0",
+  "description": "OpenTE - an open-source clone of Trade Empires (2001)",
+  "homepage": "https://github.com/willplayforfun/OpenTE",
+  "dependencies": [
+    "sdl2",
+    "sdl2-image",
+    "nlohmann-json"
+  ]
+}

@@ -1,0 +1,23 @@
+# C++ build output
+game/build/
+
+# vcpkg (expected at $VCPKG_ROOT, not vendored in this repo)
+vcpkg_installed/
+
+# Extractor output - never commit copyrighted game assets/data
+game_data/
+tools/dist/
+tools/build/
+tools/*.spec
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editor/OS
+.vscode/
+.idea/
+*.user
+.DS_Store
+Thumbs.db

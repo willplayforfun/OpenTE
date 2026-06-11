@@ -1,0 +1,16 @@
+[project]
+name = "opente-extractor"
+version = "0.1.0"
+description = "Extracts game data/assets from a user's copy of Trade Empires into OpenTE's game_data format"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+opente-extract = "extractor.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["extractor*"]
