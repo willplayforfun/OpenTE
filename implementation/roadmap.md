@@ -18,6 +18,13 @@ to `documentation/00-roadmap.md` for the RE side).
   rendering, audio, input, ui, data-model, world-and-maps, simulation,
   entities, opponent-ai, and modding.
 - **Phase 3 (this doc) — IN PROGRESS.**
+- **Phase 4 (multiplayer) — NOT STARTED, deliberately deferred.** A design
+  sketch lives in [multiplayer-plans.md](multiplayer-plans.md), but
+  multiplayer should only be addressed **after Stages 1-8 below are complete
+  and the base single-player game is successfully cloned and playable**.
+  Multiplayer adds a client/server split across most systems in the spec;
+  building it against a still-changing single-player target would mean
+  redoing that work repeatedly.
 
 ## Guiding principle: vertical slices
 
