@@ -23,6 +23,10 @@ class GameDirectory:
     def data_dir(self) -> Path:
         return self.path / "Data"
 
+    @property
+    def maps_dir(self) -> Path:
+        return self.path / "Maps"
+
 
 def _looks_valid(path: Path) -> bool:
     return all((path / required).is_file() for required in _REQUIRED_FILES)

@@ -2,7 +2,8 @@
 """OpenTE extractor CLI.
 
 Reads data and sprites from a user's own copy of Trade Empires and writes
-OpenTE's `game_data/` directory (JSON tables + PNG sprites + manifest).
+OpenTE's `game_data/` directory (JSON tables + PNG sprites + maps +
+manifest), per `OpenTE/spec/data-model.md`.
 
 Usage::
 
@@ -13,28 +14,53 @@ user is prompted interactively. If `--output` is omitted, output is written
 to `./game_data` -- run this next to (or pass `--output` pointing at) the
 OpenTE game executable so it can find its data automatically (see
 `core::find_game_data_dir` in `game/src/core/paths.cpp`).
-
-This is the toolchain-spike version: it extracts one building sprite and the
-`comm` (commodity) table. As more of `OpenTE/spec/data-model.md`'s tables and
-asset types are needed, add more `tables/*.py` / sprite exports here.
 """
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
+from typing import Any, Callable
 
-from .containers.container import find_child, load, parse_tree
+from .containers.container import DirNode, load, parse_tree
 from .game_directory import GameDirectory, find_game_directory
-from .manifest import Manifest, SpriteEntry, TableEntry, write_manifest
+from .manifest import Manifest, MapEntry, SpriteEntry, TableEntry, write_manifest
+from .maps.region import extract_map
+from .sprites.buildings import find_building_sprite_path
 from .sprites.sprite import decode_sprite, find_leaf, write_png_rgba
+from .tables.abilities import extract_abilities
+from .tables.bandits import extract_bandits
+from .tables.buildings import extract_buildings
 from .tables.commodities import extract_commodities
+from .tables.episodes import extract_episodes
+from .tables.events import extract_events
+from .tables.guards import extract_guards
 from .tables.json_io import write_json
+from .tables.technologies import extract_technologies
+from .tables.transporters import extract_transporters
 
-# A representative building sprite used to validate the toolchain end-to-end:
-# the Chinese Bazaar's "terrain" (ground-level) sprite.
-_SPIKE_SPRITE_PATH = ["cher", "cbaz", "rot0", "terr", "pla0"]
-_SPIKE_SPRITE_ID = "bldg.cher.cbaz"
+# Each entry: (table id, extractor function). The extractor receives
+# `data.{}`'s bytes + parsed root and returns a JSON-serializable object.
+_TABLE_EXTRACTORS: list[tuple[str, Callable[[bytes, DirNode], Any]]] = [
+    ("commodities", extract_commodities),
+    ("buildings", extract_buildings),
+    ("transporters", extract_transporters),
+    ("bandits", extract_bandits),
+    ("guards", extract_guards),
+    ("abilities", extract_abilities),
+    ("technologies", extract_technologies),
+    ("episodes", extract_episodes),
+    ("events", extract_events),
+]
+
+# Maps to extract for Stage 1 -- (map id, episode id, "Maps/<file>.{}" stem).
+_MAPS: list[tuple[str, str, str]] = [
+    ("ep01_china", "ep01", "ep01 China"),
+]
+
+# Building id placed at every region's headquarters marker (per
+# `documentation/scripts/te_map.py`'s `elem.regi.spec` field, always 'head').
+_HQ_BUILDING_ID = "head"
 
 
 def _prompt_for_game_directory() -> GameDirectory:
@@ -61,33 +87,80 @@ def _resolve_game_directory(arg: str | None) -> GameDirectory:
     return _prompt_for_game_directory()
 
 
-def _extract_spike_sprite(data: bytes, root, output_dir: Path) -> SpriteEntry:
-    leaf = find_leaf(root, _SPIKE_SPRITE_PATH)
+def _extract_tables(data: bytes, root: DirNode, output_dir: Path) -> tuple[list[TableEntry], dict[str, Any]]:
+    tables_dir = output_dir / "tables"
+    tables_dir.mkdir(parents=True, exist_ok=True)
+
+    entries = []
+    results: dict[str, Any] = {}
+    for table_id, extractor in _TABLE_EXTRACTORS:
+        table = extractor(data, root)
+        results[table_id] = table
+        relative_path = Path("tables") / f"{table_id}.json"
+        write_json(output_dir / relative_path, table)
+        entries.append(TableEntry(id=table_id, file=str(relative_path).replace("\\", "/")))
+    return entries, results
+
+
+def _extract_building_sprite(bldg_data: bytes, bldg_root: DirNode, buildings: dict[str, dict[str, Any]],
+                               culture: str, building_id: str, output_dir: Path) -> SpriteEntry | None:
+    building = buildings.get(f"{culture}.{building_id}")
+    if building is None:
+        return None
+
+    path = find_building_sprite_path(bldg_root, culture, building_id, building.get("look"))
+    if path is None:
+        return None
+
+    leaf = find_leaf(bldg_root, path)
     if leaf is None:
-        raise ValueError(f"sprite {'/'.join(_SPIKE_SPRITE_PATH)} not found in bldg.{{}}")
+        return None
 
-    sprite = decode_sprite(data, leaf.abs_off, leaf.size)
+    sprite = decode_sprite(bldg_data, leaf.abs_off, leaf.size)
     if sprite is None:
-        raise ValueError(f"leaf at {'/'.join(_SPIKE_SPRITE_PATH)} is not a recognized sprite")
+        return None
 
+    sprite_id = f"bldg.{culture}.{building_id}"
     sprites_dir = output_dir / "sprites"
     sprites_dir.mkdir(parents=True, exist_ok=True)
-    relative_path = Path("sprites") / f"{_SPIKE_SPRITE_ID}.png"
+    relative_path = Path("sprites") / f"{sprite_id}.png"
     write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, sprite.rgba)
 
-    return SpriteEntry(id=_SPIKE_SPRITE_ID, file=str(relative_path).replace("\\", "/"),
+    return SpriteEntry(id=sprite_id, file=str(relative_path).replace("\\", "/"),
                         width=sprite.width, height=sprite.height)
 
 
-def _extract_commodities(data: bytes, root, output_dir: Path) -> TableEntry:
-    commodities = extract_commodities(data, root)
+def _extract_maps(game_dir: GameDirectory, data_data: bytes, data_root: DirNode,
+                   bldg_data: bytes, bldg_root: DirNode, buildings: dict[str, dict[str, Any]],
+                   episodes: dict[str, dict[str, Any]], output_dir: Path) -> tuple[list[MapEntry], list[SpriteEntry]]:
+    maps_dir = output_dir / "maps"
+    maps_dir.mkdir(parents=True, exist_ok=True)
 
-    tables_dir = output_dir / "tables"
-    tables_dir.mkdir(parents=True, exist_ok=True)
-    relative_path = Path("tables") / "commodities.json"
-    write_json(output_dir / relative_path, commodities)
+    map_entries = []
+    sprite_entries: dict[str, SpriteEntry] = {}
+    for map_id, episode, file_stem in _MAPS:
+        map_data, map_footer = load(game_dir.maps_dir / f"{file_stem}.{{}}")
+        map_root = parse_tree(map_data, map_footer)
 
-    return TableEntry(id="commodities", file=str(relative_path).replace("\\", "/"))
+        episode_regions = episodes.get(episode, {}).get("regions", [])
+        result = extract_map(map_data, map_root, map_id=map_id, episode=episode,
+                              episode_regions=episode_regions, data_data=data_data, data_root=data_root)
+
+        relative_path = Path("maps") / f"{map_id}.json"
+        write_json(output_dir / relative_path, result)
+        map_entries.append(MapEntry(id=map_id, file=str(relative_path).replace("\\", "/")))
+
+        for region in result["regions"]:
+            culture = region["culture_set"]
+            sprite_id = f"bldg.{culture}.{_HQ_BUILDING_ID}"
+            if sprite_id in sprite_entries:
+                continue
+            sprite_entry = _extract_building_sprite(bldg_data, bldg_root, buildings, culture,
+                                                       _HQ_BUILDING_ID, output_dir)
+            if sprite_entry is not None:
+                sprite_entries[sprite_id] = sprite_entry
+
+    return map_entries, list(sprite_entries.values())
 
 
 def run(game_dir: GameDirectory, output_dir: Path) -> None:
@@ -96,18 +169,24 @@ def run(game_dir: GameDirectory, output_dir: Path) -> None:
     print(f"Extracting from: {game_dir.path}")
     print(f"Writing output to: {output_dir}")
 
-    bldg_data, bldg_footer = load(game_dir.data_dir / "bldg.{}")
-    bldg_root = parse_tree(bldg_data, bldg_footer)
-    sprite_entry = _extract_spike_sprite(bldg_data, bldg_root, output_dir)
-    print(f"  wrote sprite '{sprite_entry.id}' "
-          f"({sprite_entry.width}x{sprite_entry.height}) -> {sprite_entry.file}")
-
     data_data, data_footer = load(game_dir.data_dir / "data.{}")
     data_root = parse_tree(data_data, data_footer)
-    table_entry = _extract_commodities(data_data, data_root, output_dir)
-    print(f"  wrote table '{table_entry.id}' -> {table_entry.file}")
 
-    manifest = Manifest(sprites=[sprite_entry], tables=[table_entry])
+    table_entries, tables = _extract_tables(data_data, data_root, output_dir)
+    for entry in table_entries:
+        print(f"  wrote table '{entry.id}' -> {entry.file}")
+
+    bldg_data, bldg_footer = load(game_dir.data_dir / "bldg.{}")
+    bldg_root = parse_tree(bldg_data, bldg_footer)
+
+    map_entries, sprite_entries = _extract_maps(game_dir, data_data, data_root, bldg_data, bldg_root,
+                                                  tables["buildings"], tables["episodes"], output_dir)
+    for entry in map_entries:
+        print(f"  wrote map '{entry.id}' -> {entry.file}")
+    for entry in sprite_entries:
+        print(f"  wrote sprite '{entry.id}' ({entry.width}x{entry.height}) -> {entry.file}")
+
+    manifest = Manifest(sprites=sprite_entries, tables=table_entries, maps=map_entries)
     manifest_path = write_manifest(output_dir, manifest)
     print(f"  wrote manifest -> {manifest_path.name}")
 

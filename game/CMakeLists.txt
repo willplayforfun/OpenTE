@@ -24,7 +24,10 @@ add_executable(opente
     src/main.cpp
     src/core/app.cpp
     src/core/paths.cpp
+    src/data/registry.cpp
     src/render/texture.cpp
+    src/world/region.cpp
+    src/world/world.cpp
 )
 
 target_include_directories(opente PRIVATE src)

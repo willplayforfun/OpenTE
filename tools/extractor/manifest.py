@@ -36,9 +36,18 @@ class TableEntry:
 
 
 @dataclass
+class MapEntry:
+    """One map, exported to a JSON file relative to `game_data/`."""
+
+    id: str
+    file: str
+
+
+@dataclass
 class Manifest:
     sprites: list[SpriteEntry] = field(default_factory=list)
     tables: list[TableEntry] = field(default_factory=list)
+    maps: list[MapEntry] = field(default_factory=list)
     format_version: int = FORMAT_VERSION
 
 
