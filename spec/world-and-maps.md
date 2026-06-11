@@ -70,12 +70,26 @@ Notes:
   questions for the exact band mapping). This keeps the clone's terrain
   rendering/rules code working from a small, named, documented set instead
   of magic numbers.
-- The original's `mapp.alti` (altitude/roughness byte grid) is **not**
-  carried into the clone's map format — it appeared to be rendering-only
-  jitter, not gameplay elevation (per RE notes). If a future visual pass
-  wants per-tile height variation, regenerate it proceduraly or as a
-  separate optional `heightmap` field rather than reviving the ambiguous
-  original data.
+- The original's `mapp.alti` byte grid is **not yet** carried into the
+  clone's map format. An earlier RE pass treated it as rendering-only
+  jitter, but a re-check (see `documentation/08-investigation-needed.md`
+  B15) found it's a genuine per-tile heightfield, not noise: across all 74
+  `Maps/*.{}` files, `alti` is consistently 1.5x-12x smoother
+  (tile-to-tile) than the categorical `mapp.terr` grid, and the EXE's
+  `SilkRoadMap` loader (`method.SilkRoadMap.virtual_4` @ `0x4615a0`) loads
+  `alti` into a per-tile array structurally identical to (and loaded
+  alongside) `terr` — confirming it's live data, not vestigial. The initial
+  ep01-China-only finding that "water tiles cluster near `alti~=7-8` (sea
+  level) and the highest terrain band averages `alti~=112`" does **not**
+  generalize as a universal constant — per-map elevation ranges vary widely
+  (e.g. `ep06 Persepolis`'s lowest band averages `alti~=132`), and 15/74
+  maps have their lowest-`terr`-band tiles at a *higher* mean `alti` than
+  the rest of the map. Any "sea level" / water-plane height should be
+  derived **per-map** (e.g. from `alti`'s own minimum), not from a
+  `terr`-band lookup. B15 is the open investigation to find the
+  height->screen-pixel scale factor and add a `heightmap` field (mirroring
+  `terrain`'s `{encoding, data}` shape) plus the per-tile vertical offset and
+  height-difference "skirt" rendering it implies.
 - **`decorations`** are static, non-interactive scatter objects (trees,
   rocks). They have no gameplay effect and are rendered behind/below
   entities. `culture`/`decoration_id` select which sprite from the

@@ -60,28 +60,31 @@ made explicit since the originals were only inferable from usage.
 Four master tuning knobs, ported verbatim from the original (where `PSCx`
 controls normal per-tick price drift and `PSFx` controls multi-tick
 trend-driven decay; the `A`/`T` suffix splits each pair by the sign of the
-price delta):
+price delta). **Values confirmed from the original's `data.{}` root `game`
+table** (`documentation/03-exe-analysis.md` Round 20 — these are real
+`0x48`/float fields on the `game` record, read at runtime via the
+`Scope`/config lookup chain documented in Round 4-7):
 
 ```json
 {
   "economy": {
-    "price_scale_above": 0.0,   // PSCA
-    "price_scale_below": 0.0,   // PSCT
-    "trend_decay_above": 0.0,   // PSFA
-    "trend_decay_below": 0.0,   // PSFT
-    "growth_threshold": 0.0,    // 'grow'
-    "decline_threshold": 0.0,   // 'decl'
+    "price_scale_above": 0.04,  // PSCA  (data.{} game.psca)
+    "price_scale_below": 0.06,  // PSCT  (data.{} game.psct)
+    "trend_decay_above": 0.04,  // PSFA  (data.{} game.psfa)
+    "trend_decay_below": 0.08,  // PSFT  (data.{} game.psft)
     "restock_period_ticks": 99999
   }
 }
 ```
 
-The original's exact numeric values for these were not extracted (they live
-in an embedded config-text blob, not `data.{}` — `03-exe-analysis.md` Round
-4-7 found the *names* and *call sites* but not the *values*). **The clone
-must choose its own starting values and tune by playtesting** — this is
-explicitly a balance-tuning surface for [modding.md](modding.md), not a
-"decode this number" RE task. See Open questions.
+`growth_threshold`/`decline_threshold` (`grow`/`decl`) are **not** global —
+they're per-episode fields on `epis.<ep>` (see "Demand-tier" below and
+`episodes.json`'s `economy` block in
+[data-model.md](data-model.md#tables-episodesjson-from-epis-20-entries)).
+
+These are now real EXE-derived starting values, not "pick your own" — but
+they remain a balance-tuning surface for [modding.md](modding.md) (a mod's
+`config.json` can still override them).
 
 ### Per-tick price update (per active `MarketGood`)
 
@@ -158,14 +161,17 @@ tie to whatever calendar/date system [ui.md](ui.md) displays).
 
 ### Demand-tier (growth/decline) tracking
 
-Direct port of `fcn.00474fb0` (Round 4-7):
+Direct port of `fcn.00474fb0` (Round 4-7). `growth_threshold`/
+`decline_threshold` come from the **current episode's** `grow`/`decl`
+fields (`episodes.json`'s `economy` block — confirmed real `0x48`/float
+fields on `epis.<ep>`, Round 20), not a global config:
 
 ```cpp
-void update_demand_tier(MarketGood& g, const Commodity& comm, const EconomyConfig& cfg) {
+void update_demand_tier(MarketGood& g, const Commodity& comm, const Episode& ep) {
     double ratio = (double)g.current_price / comm.base_price; // approximation, see note
-    if (ratio >= cfg.growth_threshold) {
+    if (ratio >= ep.economy.growth_threshold) {
         if (increment_capped(g.demand_tier)) fire_event(MarketEvent::DemandGrowing, g);
-    } else if (ratio < cfg.decline_threshold) {
+    } else if (ratio < ep.economy.decline_threshold) {
         if (decrement_capped(g.demand_tier)) fire_event(MarketEvent::DemandDeclining, g);
     }
 }
@@ -177,6 +183,19 @@ decisions ([opponent-ai.md](opponent-ai.md)). The exact `ratio` formula
 (`fcn.00475120`) wasn't fully decoded; `current_price/base_price` is a
 reasonable approximation — refine if demand-tier behavior feels off in
 playtesting.
+
+`grow`/`decl` vary by episode — most are `grow≈1.15`/`decl≈0.7-0.8`, but the
+two starter episodes (`ep00`/`ep01`) are more lenient (`grow=1.25`,
+`decl=0.6`). The same `epis.<ep>` record also has `tick` (episode length in
+ticks — already used for `late`/episode-end per Round 8), and three more
+`0x48`/float fields not yet wired into the spec: `itra`/`ltra` ("initial"/
+"last" trade ratio?, `0.75` for `ep00`/`ep01` vs `0.2-0.4` for later
+episodes), `mpri` (min price ratio?, `0.1` for `ep00`/`ep01` vs
+`0.2-0.25` later), and `popu` (population growth rate, flat `0.2`
+everywhere). These look like further per-episode economy tuning knobs —
+worth revisiting if `ep00`/`ep01`'s economy feels off relative to later
+episodes (their `itra`/`ltra`/`mpri` values are notably different from the
+rest).
 
 ### Stock arbitrage between connected markets
 
@@ -280,10 +299,11 @@ registered by `event_id`) so new events are additive.
 - **`SIM_HZ` (tick rate)**: the original's real-time tick rate (ticks per
   second) wasn't pinned down (`03-exe-analysis.md` Round 8 found the
   dispatch chain but not its driving frequency). Choose empirically.
-- **`PSCA`/`PSCT`/`PSFA`/`PSFT`/`grow`/`decl` numeric values**: not
-  extracted (embedded config, not `data.{}`). Clone defines its own,
-  documented in `config.json`. (Tier 1 item B2 — see
-  `documentation/08-investigation-needed.md`.)
+- ~~**`PSCA`/`PSCT`/`PSFA`/`PSFT`/`grow`/`decl` numeric values**~~
+  **Resolved (2026-06-11)** — all are real `data.{}` fields: `PSCA=0.04`/
+  `PSCT=0.06`/`PSFA=0.04`/`PSFT=0.08` on the root `game` table, `grow`/`decl`
+  per-episode on `epis.<ep>` (see "Tunable constants"/"Demand-tier" above).
+  (Tier 1 item B2, `03-exe-analysis.md` Round 20.)
 - **Exact `PSCA`/`PSCT` sign-selection branch**: approximated, see formula
   notes above. (Tier 1 item B3.)
 - **`fcn.00475120`'s demand-tier ratio formula**: approximated as

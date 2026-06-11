@@ -293,10 +293,32 @@ The largest/most structurally complex table. Per episode:
       "road": { "none": 5, "road": 0, "trai": 3, "rail": 0, "cana": 50, "wate": 50 },
       "rail": { "none": 0, "road": 0, "trai": 0, "rail": 0, "cana": 0, "wate": 0 },
       "cana": { "none": 20, "road": 50, "trai": 50, "rail": 0, "cana": 0, "wate": 0 }
+    },
+    "economy": {
+      "tick": 25,
+      "growth_threshold": 1.149999976158142,
+      "decline_threshold": 0.699999988079071,
+      "initial_trade_ratio": 0.20000000298023224,
+      "last_trade_ratio": 0.30000001192092896,
+      "min_price_ratio": 0.25,
+      "population_growth_rate": 0.20000000298023224
     }
   }
 }
 ```
+
+- **`economy`** (new fields on `epis.<ep>`, `0x48`/float unless noted) —
+  resolved (Round 20, see `documentation/03-exe-analysis.md`):
+  `growth_threshold`/`decline_threshold` (original `grow`/`decl`) feed
+  [simulation.md](simulation.md)'s demand-tier tracking and vary per
+  episode (most are `~1.15`/`~0.7-0.8`; `ep00`/`ep01` are more lenient at
+  `1.25`/`0.6`). `tick` (int) is the episode length in ticks. `
+  initial_trade_ratio`/`last_trade_ratio`/`min_price_ratio` (original
+  `itra`/`ltra`/`mpri`) and `population_growth_rate` (original `popu`) are
+  further per-episode economy knobs whose exact usage in the simulation
+  formula isn't traced yet — `ep00`/`ep01` again stand out (`itra=ltra=0.75`,
+  `mpri=0.1` vs `~0.2-0.4`/`~0.2-0.25` for later episodes). Carried through
+  verbatim for now; revisit if early-episode economy feel needs tuning.
 
 - `obsolescence` corresponds to the original `supe`/`infe`/`remo` fields
   (per `documentation/01-container-format.md` gotcha 11 / the embedded
@@ -345,9 +367,13 @@ Low priority — `terrain.json` mainly feeds tile texture selection (see
 [world-and-maps.md](world-and-maps.md)); `misc.json`/`particles.json` are
 carried through as opaque key/value blobs for now.
 
-`game` (global engine constants) is **not extracted as a table** — the
-clone defines its own config (see "Tunable constants" below) rather than
-inheriting the original's `game` table verbatim.
+`game` (global engine constants, root `data.{}` table) is **not extracted
+as a general-purpose table** — but its four economy tuning floats
+(`psca`/`psct`/`psfa`/`psft`) **are** extracted into `config.json`'s
+`economy` block (see "Tunable constants" below); the rest of `game`
+(UI colors/timers under `busy`/`colo`/`dlev`/`tune`/`uber`/`vict`, plus
+loose fields like `prof`/`forc`/`squa`/`tdep`/`vter`) is not modeled — the
+clone defines its own UI/engine config for those.
 
 ## Sprites
 
@@ -450,14 +476,17 @@ keep re-prompting until valid input or cancel.
 ## Tunable constants
 
 The original's economy formula depends on four named config constants
-(`PSCA`/`PSCT`/`PSFA`/`PSFT`, see [simulation.md](simulation.md)) plus a few
-others (`futx`/`futy` defaults, restock period, etc.) that lived in an
-embedded `Scope`/config-text system, not `data.{}`. The clone collects all
-such constants into a single `tables/config.json` (or
-`game_data/config.json` at the top level) with descriptive names, sane
-defaults derived from the RE notes, and comments (JSON5/JSONC if the parser
-supports it, otherwise a sibling `config.md` documenting each key) — these
-are the first things a balance-focused mod would want to tweak.
+(`PSCA`/`PSCT`/`PSFA`/`PSFT`, see [simulation.md](simulation.md)) — these
+are real `0x48`/float fields on `data.{}`'s root `game` table
+(`psca=0.04`/`psct=0.06`/`psfa=0.04`/`psft=0.08`, confirmed
+`documentation/03-exe-analysis.md` Round 20) and the extractor reads them
+directly from there, plus a few others (`futx`/`futy` defaults, restock
+period, etc.) not yet wired up. The clone collects all such constants into a
+single `tables/config.json` (or `game_data/config.json` at the top level)
+with descriptive names, the RE-confirmed defaults above, and comments
+(JSON5/JSONC if the parser supports it, otherwise a sibling `config.md`
+documenting each key) — these are the first things a balance-focused mod
+would want to tweak.
 
 ## Open questions / RE gaps
 

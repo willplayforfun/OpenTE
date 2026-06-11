@@ -182,8 +182,10 @@ delete them — git history retains the record).
 | Road/trail tiles use flat debug overlay, not real connection-sprite variants | Stage 3 | [rendering.md](../spec/rendering.md) |
 | Economy tuning constants (`PSCA` etc.) are first-guess values | Stage 4 | `tuning-log.md` (create when Stage 4 starts) |
 | Merchant orders issued manually, no AI | Stage 5 | [opponent-ai.md](../spec/opponent-ai.md) |
+| Starting buildings/resources/merchants for a region: extract real `enti` table from a matching save (`scripts/te_save.py`) where available; otherwise scatter `bres` per `epis.<ep>.regi.<id>.grou` quotas on non-water tiles | Stage 1 | `documentation/09-episode-population.md` (workstream H, in progress) |
 | UI is flat-color placeholders; UI sprites (`a_ui`/`d_ui`/`m_ui`) are extracted but not wired into widgets | All UI stages | [ui.md](../spec/ui.md) Open questions (T0.4, extraction done, wiring pending) |
 | Single-region only | Stages 1-7 | Stage 8 |
+| Terrain is rendered flat (no per-tile elevation); edge skirts (`terrain.edge`) only drawn along the map's south/east border, not at internal height-difference edges | Stage 1 | `documentation/08-investigation-needed.md` B15 |
 
 **Note (2026-06-11, see `documentation/08-investigation-needed.md` Tier 0):**
 Stage 1's map extraction and Stage 4's economy/production placeholders can
