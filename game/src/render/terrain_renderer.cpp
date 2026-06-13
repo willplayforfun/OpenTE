@@ -233,12 +233,12 @@ void TerrainRenderer::render(const Camera& camera) const {
     // (B15 Round 34, terrain-blending-plan.md Stage A.0) -- each texture page
     // is a 256x256 image that tiles seamlessly across an 8x16-tile region of
     // the map (32x16px per tile, 2x-magnified onto the 64x32 screen diamond).
-    // Computed as `fmod(col,8)/8` / `fmod(row,16)/16` (always in [0,1)) so it
-    // doesn't depend on the renderer's texture wrap mode -- SDL2 has no
-    // explicit wrap-mode API, and the source textures are seamlessly
-    // tileable, so the fmod'd UV is equivalent to true wrapping. Shared
-    // corner vertices get identical UVs by construction (same `col`/`row`),
-    // so adjacent tiles tile continuously with no seams.
+    // UV origin is `fmod(tx,8)/8` / `fmod(ty,16)/16` per *tile*, with each
+    // corner adding a fixed 1/8 or 1/16 step (see below) -- this avoids
+    // SDL2's lack of a wrap-mode API (the source textures are seamlessly
+    // tileable, so a [0,1] UV span per tile is equivalent to true wrapping).
+    // Per-vertex `fmod`'d UVs would wrap to 0 on the "+1" corners at every
+    // period boundary, stretching the whole texture across that tile.
     //
     // Corner order is fixed as NW, NE, SE, SW for every pass below (base,
     // Stage C shore overlays).
@@ -250,6 +250,15 @@ void TerrainRenderer::render(const Camera& camera) const {
     for (int ty = 0; ty < height; ++ty) {
         for (int tx = 0; tx < width; ++tx) {
             const int own_index = texture_index_at(tx, ty);
+
+            // UV origin for this *tile* (not per-vertex): each corner adds a
+            // fixed 1/period step from here, so a single quad always spans
+            // exactly one texture cell. Computing fmod(col,period) per vertex
+            // instead would make the "+1" corners wrap to 0 at every period
+            // boundary (col/row a multiple of the period), stretching the
+            // whole texture across that tile.
+            const float u0 = std::fmod(static_cast<float>(tx), kUPeriod) / kUPeriod;
+            const float v0 = std::fmod(static_cast<float>(ty), kVPeriod) / kVPeriod;
 
             SDL_Vertex verts[4];
             for (int c = 0; c < 4; ++c) {
@@ -264,8 +273,8 @@ void TerrainRenderer::render(const Camera& camera) const {
 
                 verts[c].position = {screen_pos.x, screen_pos.y};
                 verts[c].color = terrain_vertex_color_[vidx];
-                verts[c].tex_coord = {std::fmod(static_cast<float>(col), kUPeriod) / kUPeriod,
-                                       std::fmod(static_cast<float>(row), kVPeriod) / kVPeriod};
+                verts[c].tex_coord = {u0 + static_cast<float>(kCornerCol[c]) / kUPeriod,
+                                       v0 + static_cast<float>(kCornerRow[c]) / kVPeriod};
             }
 
             // Base pass (Stage A.5 / E): the tile's own texture page, or flat
