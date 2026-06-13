@@ -26,10 +26,8 @@ screen_y = (tx + ty) * (TILE_H / 2)
 ```
 
 with `TILE_W : TILE_H = 2 : 1` — **`TILE_W = 64`, `TILE_H = 32`, confirmed
-from the original EXE's `TMapView` projection constants** (`0x5fc738` =
-64.0, `0x5fc73c` = 32.0; see `documentation/03-exe-analysis.md` Round 19).
-The inverse (screen -> tile, needed for tile picking,
-[input.md](input.md)):
+from the original's projection constants**. The inverse (screen -> tile,
+needed for tile picking, [input.md](input.md)):
 
 ```
 tx = (screen_x / (TILE_W/2) + screen_y / (TILE_H/2)) / 2
@@ -60,9 +58,8 @@ struct Camera {
 ## Terrain rendering
 
 The terrain is rendered as a **per-vertex height-displaced mesh**, matching
-the original's `D3DTLVERTEX`-based tile rasterizer
-(`documentation/08-investigation-needed.md` B15, Rounds 25-37 — fully
-closed):
+the original's `D3DTLVERTEX`-based tile rasterizer (confirmed by RE
+analysis):
 
 - **Vertex grid**: for a `width x height` tile region, there is a
   `(width+1) x (height+1)` grid of vertices, one per tile-grid corner. Each
@@ -90,9 +87,8 @@ closed):
   floor and full brightness (see `kSlopeNormalZ`/`kLightDir`/`kAmbient` in
   `render/iso.h`). This tint is set on `SDL_Vertex::color` and multiplies the
   tile texture, approximating the original's per-vertex diffuse lighting.
-  The original's exact light direction/ambient constants weren't recovered
-  (B15 "still open" item 2); the clone's values are reasonable stand-ins and
-  can be tuned freely.
+  The original's exact light direction/ambient constants weren't recovered;
+  the clone's values are reasonable stand-ins and can be tuned freely.
 - **UV mapping**: each tile's quad maps its own texture, a square with the
   tile's diamond inscribed touching the texture's **edge midpoints** (the
   same convention the old rect-blit relied on). The quad's 4 tile-grid-corner
@@ -110,7 +106,7 @@ closed):
   sample tiny, heavily-magnified slivers of each page (see Stage A.0's
   updated notes in `terrain-blending-plan.md`).
 - **No skirt/edge-cliff pass**: the original's `alti >= 13` mask is
-  walkability-only and has no renderer-geometry consumer (B15 Round 33).
+  walkability-only and has no renderer-geometry consumer (confirmed by RE).
   Steep height differences between adjacent tiles simply produce steep
   quads in the displaced mesh — there is no separate "cliff face" sprite or
   geometry to draw.
@@ -123,38 +119,65 @@ closed):
 
 The original's D3D rasterizer additionally multi-pass-blends neighboring
 tiles' textures at shared edges (an edge-feather pass, plus shore-mask
-overlays and decals — B15 Rounds 35-37). The clone implements the
-non-deferred parts of this per
+overlays and decals). The clone implements the non-deferred parts of this per
 [`terrain-blending-plan.md`](../implementation/terrain-blending-plan.md)
 Stages A-C and E, as additional `SDL_RenderGeometry` passes drawn on top of
 each tile's base quad (same corner vertices/positions/colors, only `tex_coord`
 and `color.a` differ per pass):
 
-- **Edge blending (Stage B, "B.4 fallback")**: for each of the tile's N/E/S/W
-  neighbors, if the neighbor is in the same water/land class but uses a
-  different texture page, a second quad is drawn sampling the *neighbor's*
-  page with a per-vertex alpha gradient (255 on the shared edge, 0 on the
-  opposite edge) — fading the neighbor's texture in towards that edge.
-  `terr/edge` was inspected and found to be a plain gradient (not a baked
-  feather-cell atlas, B.1), so this per-vertex alpha gradient is used instead
-  of an edge-atlas texture. Map-edge tiles (no neighbor) and cross-class
-  (water/land) edges are skipped — the latter is handled by shore overlays.
+- **Edge blending (Stage B, implemented)**: the renderer draws up to 4
+  additional quads per tile — one per N/E/S/W neighbor that's
+  in the same water/land class but uses a *different* texture page — each
+  sampling the **`tran`-family atlas** (`terrain.tran`, extracted from
+  `terr/trch` for the `chi1`/`ep01_china` palette; other palettes use
+  `tran`/`tr14`/`tr15`/`tr17`, not yet extracted/selected per-episode). Each
+  pass reuses the base quad's geometry (same corner positions/heights/colors,
+  only `tex_coord` differs) with UVs selecting one of the atlas's 16 cells by
+  the *neighbor's* texture-page index (`col = nbr & 3, row = nbr >> 2`,
+  64x64px cells, near-corner UV `(cell*64+0.5)/256` per the original's
+  formula).
+  Only **half** of each cell (32x32px, `kTranSampleUV`) is actually sampled
+  per tile — a 2026-06-13 empirical adjustment to match the base pass's 2x
+  atlas-px-to-screen-px magnification (sampling the full 64px cell made the
+  dissolve dots look smaller/denser than the base texture's features; see
+  `terrain-blending-plan.md` Stage B.3 "Update (scale)"). The
+  dithered-dissolve pattern *is* the transition's "feather", baked into the
+  atlas's pixels. The decoded `terr/trch` source is opaque (alpha==255
+  everywhere) with near-black (RGB <= ~0x1F) background pixels and the
+  dissolve "dots" as the only non-near-black pixels — there's no usable alpha
+  gradient as-is. The extractor (`tools/extractor/sprites/terrain.py`'s
+  `_apply_dissolve_mask`) recuts this into a **hard alpha mask** (dot pixels
+  opaque, near-black background fully transparent, threshold
+  `_TRAN_DISSOLVE_THRESHOLD = 8`), drawn with ordinary `SDL_BLENDMODE_BLEND`
+  so only the dissolve dots are visible, the base terrain pass showing
+  through everywhere else. `terr/edge` (a
+  plain vertical gradient) is **unrelated** to this pass — the EXE reads it
+  separately, via a different single-texture draw call (likely a
+  map-border/skirt decoration), out of scope for this stage. Map-edge tiles
+  (no neighbor) and cross-class (water/land) edges are skipped — the latter
+  is handled by shore overlays. The per-direction rotation of the cell's
+  (NW,NE,SE,SW) corners onto the tile's quad corners
+  (`TerrainRenderer::render_edge_blends`'s `kEdgeBlendK = {2,3,0,1}` for
+  N/E/S/W) is derived from the original's corner-rewrite arithmetic (raw
+  `k = ((dir+1)&7)>>1` = `{1,2,3,0}`, then a +1 cyclic correction after
+  visual checks) — tile corner `j`
+  (NW=0,NE=1,SE=2,SW=3) gets cell corner `m=(j-k) mod 4` from
+  `(u1,v1),(u0,v1),(u0,v0),(u1,v0)` for `m=0..3`.
+  `terrain_blending_enabled` gates this pass (Stage B.5).
 - **Shore overlays (Stage C)**: at water/land boundaries, up to two
   additional quads are drawn from the `terrain.coa0`/`terrain.coa1` atlases:
   an 8-direction water-neighbor mask selects an "overlay1" cell via a 256-entry
   lookup table, and a 4-corner water-flags value selects an "overlay2" cell
   (shoreline corner piece) via an 85-entry lookup table + shape map. Both
-  tables and the 53-cell UV-index array are EXE-derived
-  (`documentation/extracted/exe_b15_round37_shore_tables.txt`,
-  `exe_b15_round37_shore_tables.txt`'s "UV-index array @ 0x5f8940"). The
-  square-cell-to-diamond-quad UV mapping (`kShoreCellSize` = 2/16 of the
-  atlas) is a documented approximation pending visual validation.
+  tables and the 53-cell UV-index array are derived from the original's
+  data. The square-cell-to-diamond-quad UV mapping (`kShoreCellSize` = 2/16
+  of the atlas) is a documented approximation pending visual validation.
 - **Master toggle (Stage E)**: `App::terrain_textures_enabled_` (mirroring
-  the original's `TMapView+0x249` "Terrain textures" option) — when false,
-  every tile is drawn as a flat slope-shaded quad with no texture and no
-  blending/overlay passes. `terrain_blending_enabled_`/
-  `shore_overlays_enabled_` (`+0x24a`/`+0x24b`) independently gate the B/C
-  passes. None of the three are exposed in UI yet (code-level only).
+  the original's "Terrain textures" option) — when false, every tile is
+  drawn as a flat slope-shaded quad with no texture and no blending/overlay
+  passes. `terrain_blending_enabled_`/`shore_overlays_enabled_` independently
+  gate the B/C passes. None of the three are exposed in UI yet (code-level
+  only).
 - **Decals**: not implemented — out of scope for this plan (see
   `terrain-blending-plan.md` Stage D, deferred indefinitely pending Stage 3
   pathway rendering).
@@ -198,8 +221,7 @@ binds = better performance) without complicating the extractor or the
 ### Animation playback
 
 The original drives sprite-frame selection via a small per-entity bytecode
-VM (`Data/anim.{}`, see `documentation/03-exe-analysis.md` Rounds 9-11/14).
-The clone should **not** reimplement this bytecode VM — it's an
+VM (`Data/anim.{}`). The clone should **not** reimplement this bytecode VM — it's an
 implementation detail of the original engine, not a format worth
 preserving. Instead, model each animated entity's visual state as a small,
 explicit **state machine** defined in data:
@@ -295,37 +317,34 @@ world/camera-projected mode used for tiles/entities.
 ## Open questions / RE gaps
 
 - ~~**Native tile pixel dimensions** (`TILE_W`/`TILE_H`)~~ **Resolved** —
-  confirmed `TILE_W = 64`, `TILE_H = 32` from the EXE's `TMapView`
-  projection constants (`documentation/03-exe-analysis.md` Round 19,
-  Workstream B item 7e/B9). Sprite extraction can still be used to
-  double-check alignment, but these are no longer placeholders.
-- **Exact "invalid placement" highlight color**: the original RE notes
-  (`03-exe-analysis.md` Round 14) found two "valid" blue tones but never
-  located a red/invalid color in the disassembled placement-overlay code —
-  it may be communicated by *absence* of a highlight rather than a distinct
-  color. The clone is free to choose its own (a red highlight is clearer
-  UX regardless).
-- ~~**Team-color tinting**~~ **Resolved (negatively)** — Workstream D Round
-  11's full 24,065-leaf check of `unit.{}` confirms all sprites decode as
-  ARGB4444 with correct, full color (not grayscale masks); the earlier
-  "grayscale mask" theory was a misread of ARGB4444's low byte (see
-  `documentation/08-investigation-needed.md` T0.5). Sprites are extracted as
+  confirmed `TILE_W = 64`, `TILE_H = 32` from the original's projection
+  constants. Sprite extraction can still be used to double-check alignment,
+  but these are no longer placeholders.
+- **Exact "invalid placement" highlight color**: RE analysis found two
+  "valid" blue tones but never located a red/invalid color in the original's
+  placement-overlay logic — it may be communicated by *absence* of a
+  highlight rather than a distinct color. The clone is free to choose its own
+  (a red highlight is clearer UX regardless).
+- ~~**Team-color tinting**~~ **Resolved (negatively)** — a full check of all
+  24,065 leaves in `unit.{}` confirms all sprites decode as ARGB4444 with
+  correct, full color (not grayscale masks); the earlier "grayscale mask"
+  theory was a misread of ARGB4444's low byte. Sprites are extracted as
   full-color RGBA as-is. If per-player recoloring is wanted for visual
   clarity (e.g. recoloring banners/flags only), that's a clone design choice
   using `SDL_SetTextureColorMod`, not an RE-blocked item.
-- ~~**3D terrain heightmap rendering**~~ **Resolved** — B15 (Rounds 25-37) is
-  fully closed: per-vertex height displacement (`~45.25*zoom` px/world-unit),
-  8-neighbor slope-based diffuse shading, and no skirt/edge-cliff pass. See
-  "Terrain rendering" above for the implemented clone model, including the
-  per-tile texture-page selection and the edge-blend/shore-overlay passes
-  (`terrain-blending-plan.md` Stages A-C/E). The original's
-  `uv = (col/8, row/16)` continuous shared-atlas texture mapping (Stage A.0)
-  was tried and reverted in favor of per-tile edge-midpoint UVs — see
-  "Terrain rendering"'s UV mapping bullet. The exact light/ambient constants
-  for slope shading (item 2 below) are still open, and the shore-overlay UV
-  mapping is a documented approximation pending visual validation.
-- **Exact slope-shading light direction/ambient constants**: B15 confirmed
+- ~~**3D terrain heightmap rendering**~~ **Resolved** — per-vertex height
+  displacement (`~45.25*zoom` px/world-unit), 8-neighbor slope-based diffuse
+  shading, and no skirt/edge-cliff pass. See "Terrain rendering" above for
+  the implemented clone model, including the per-tile texture-page selection
+  and the edge-blend/shore-overlay passes (`terrain-blending-plan.md` Stages
+  A-C/E). The original's `uv = (col/8, row/16)` continuous shared-atlas
+  texture mapping (Stage A.0) was tried and reverted in favor of per-tile
+  edge-midpoint UVs — see "Terrain rendering"'s UV mapping bullet. The exact
+  light/ambient constants for slope shading (item 2 below) are still open,
+  and the shore-overlay UV mapping is a documented approximation pending
+  visual validation.
+- **Exact slope-shading light direction/ambient constants**: RE confirmed
   *that* the original computes per-vertex normals and a diffuse term, but
   not the exact light direction or ambient floor values. `render/iso.h`'s
   `kLightDir`/`kAmbient`/`kSlopeNormalZ` are reasonable stand-ins; revisit if
-  further EXE analysis recovers the originals.
+  further analysis recovers the originals.

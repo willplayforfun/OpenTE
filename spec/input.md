@@ -2,10 +2,9 @@
 
 This document specifies input handling: event flow, camera controls, tile
 picking, and the building-placement / pathway-drag-out interaction. The
-placement-legality rules are **ported from the original**
-(`documentation/03-exe-analysis.md` Rounds 12-18, the most thoroughly
-decoded subsystem in the RE notes) since they directly define core gameplay
-("can I build here?"); the input *handling code* itself (event loop,
+placement-legality rules are **ported from the original** (the most
+thoroughly decoded subsystem in the RE work) since they directly define core
+gameplay ("can I build here?"); the input *handling code* itself (event loop,
 state machine) is a clean SDL2-based design.
 
 ## Event flow
@@ -64,9 +63,9 @@ valid — callers (placement preview, etc.) should check bounds and treat
 out-of-bounds as "no tile hovered".
 
 This formula matches the original's tile-picking implementation
-(EXE-confirmed, see `documentation/03-exe-analysis.md` Round 19) — the
-clone's direct floor-based computation replaces the original's precomputed
-lookup-table optimization, which isn't needed at this scale.
+(confirmed by RE analysis) — the clone's direct floor-based computation
+replaces the original's precomputed lookup-table optimization, which isn't
+needed at this scale.
 
 ## Building placement
 
@@ -87,9 +86,8 @@ lookup-table optimization, which isn't needed at this scale.
 ### Placement legality check (ported algorithm)
 
 This reproduces the original's decoded placement-legality checks (fully
-derived in `documentation/03-exe-analysis.md` Rounds 18 and 29), restated as
-a clean function returning a typed reason instead of a magic int written to
-a global field:
+derived from RE analysis), restated as a clean function returning a typed
+reason instead of a magic int written to a global field:
 
 ```cpp
 enum class PlacementError {
@@ -131,43 +129,40 @@ short-circuit behavior):
 4. **Canal water adjacency** (`CanalNotAdjacentToWater`, canal-type
    buildings only): at least one footprint tile must be adjacent to a
    navigable-water tile.
-5. **Blocked-neighbor count** (`TooManyBlockedNeighbors`): Round 29
-   (`documentation/03-exe-analysis.md`) linearized the original's reason code
-   `0xe`: across all footprint tiles, count tiles whose "primary direction"
-   neighbor has connectivity-mask byte0 (Trail) `& 0xf == 2`; reject if that
-   count is **> 1**. The clone's "at most one footprint-edge tile adjacent to
-   a category-2 trail/road tile" check is a direct port of this part. **Gap**:
-   reason codes `0x10`/`0x11` are *additional* fallback rejections (a second
-   "diagonal-blocked" tile counter plus per-tile "corner flags", each compared
-   against small constants) that Round 29 could not fully isolate
-   arithmetically — the original's full `TooManyBlockedNeighbors` predicate is
-   confirmed to be **stricter** than the `0xe`-only check above, but the exact
-   diagonal/corner thresholds are not known. See Open questions.
-6. **Capacity check** (`CapacityExceeded`, recipe-producing buildings): Round
-   29 resolved the numerator — `fcn.408a10(recipe_id)` =
-   `data.bldg.<episode>.<recipe_id>.cost` (already extracted, known field).
-   **Gap**: the denominator (`this->+0x10.vtable[0]()`, a virtual call on an
-   unidentified runtime object — likely a per-building or per-player
-   "capacity" accessor) was not resolved, so the comparison
-   `cost > capacity` cannot be ported. Until the denominator's source is
-   found, this check has **no original behavior to replicate** for the clone
-   — see Open questions.
+5. **Blocked-neighbor count** (`TooManyBlockedNeighbors`): the original's
+   primary blocked-neighbor check works as follows: across all footprint
+   tiles, count tiles whose "primary direction" neighbor has
+   connectivity-mask byte0 (Trail) `& 0xf == 2`; reject if that count is
+   **> 1**. The clone's "at most one footprint-edge tile adjacent to a
+   category-2 trail/road tile" check is a direct port of this part. **Gap**:
+   there are *additional* fallback rejections (a second "diagonal-blocked"
+   tile counter plus per-tile "corner flags", each compared against small
+   constants) that could not be fully isolated arithmetically — the
+   original's full `TooManyBlockedNeighbors` predicate is confirmed to be
+   **stricter** than the primary check above, but the exact diagonal/corner
+   thresholds are not known. See Open questions.
+6. **Capacity check** (`CapacityExceeded`, recipe-producing buildings): the
+   numerator is `data.bldg.<episode>.<recipe_id>.cost` (already extracted,
+   known field). **Gap**: the denominator (a virtual call on an unidentified
+   runtime object — likely a per-building or per-player "capacity" accessor)
+   was not resolved, so the comparison `cost > capacity` cannot be ported.
+   Until the denominator's source is found, this check has **no original
+   behavior to replicate** for the clone — see Open questions.
 7. **Footprint overlap with other entities** (`OverlapsExistingFootprint`):
    AABB-overlap test of the new footprint against existing entities' rects.
-8. **Special-type adjacency** (`SpecialAdjacencyFailed`): Round 29 resolved
-   that `fcn.473ae0(building_id)` looks up `data.bldg.defa.<id>.type` and
+8. **Special-type adjacency** (`SpecialAdjacencyFailed`): RE analysis
+   resolved that the original looks up `data.bldg.defa.<id>.type` and
    **every one of the 153 buildings** falls into one of four categories
-   (`bpro`/`bdem`/`bdep`/`bres`) — this is a type-category branch that applies
-   to *all* buildings, not a small ports/temples allowlist as earlier
-   speculated. **Gap**: what each category-branch of `fcn.473ae0` actually
-   *checks* (the adjacency rule itself — e.g. what tile/entity a `bpro`
-   building must be adjacent to) was not decoded; two type-tag globals
-   (`0x647734`/`0x644568`) that the dispatcher reads are zero-initialized
-   `.data` cells set at runtime and would need dynamic analysis to pin down.
-   The clone can populate `buildings.json[id].type` (`bpro`/`bdem`/`bdep`/
-   `bres`) from already-decoded data now, but
-   `requires_adjacent_type`'s per-category *rule* remains undesigned pending
-   that RE work — see Open questions.
+   (`bpro`/`bdem`/`bdep`/`bres`) — this is a type-category branch that
+   applies to *all* buildings, not a small ports/temples allowlist as
+   earlier speculated. **Gap**: what each category-branch actually *checks*
+   (the adjacency rule itself — e.g. what tile/entity a `bpro` building
+   must be adjacent to) was not decoded; two type-tag globals that the
+   dispatcher reads are zero-initialized and set at runtime, so dynamic
+   analysis would be needed to pin them down. The clone can populate
+   `buildings.json[id].type` (`bpro`/`bdem`/`bdep`/`bres`) from
+   already-decoded data now, but `requires_adjacent_type`'s per-category
+   *rule* remains undesigned pending that RE work — see Open questions.
 9. **Minimum-spacing rule** (`TooCloseToSameType`): no footprint tile may be
    within Chebyshev distance 1 of an existing entity of the **same building
    type** (and, per the original, same area/region scope). This prevents
@@ -180,16 +175,16 @@ short-circuit behavior):
 The original's hover-time check additionally supports **non-rectangular
 "shapes"** for occupancy/exclusion-radius tests (a `shape_id` selects a
 per-row horizontal-extent table — e.g. "no other market within N tiles in a
-diamond pattern"). Round 29 (`documentation/03-exe-analysis.md`) extracted
-the 4 underlying `(min_dx, max_dx)`-per-row tables (`shape_id` 4/6/8/10,
-`shape_id` 5/7/9/other = "no shape" = footprint-only), each following
-`(-(r), r-1)` per row for an increasing per-row radius `r` (a diamond/circle,
-larger `shape_id` = larger radius) — this part is concrete, real game data.
+diamond pattern"). RE analysis extracted the 4 underlying
+`(min_dx, max_dx)`-per-row tables (`shape_id` 4/6/8/10; `shape_id`
+5/7/9/other = "no shape" = footprint-only), each following `(-(r), r-1)` per
+row for an increasing per-row radius `r` (a diamond/circle, larger
+`shape_id` = larger radius) — this part is concrete, real game data.
 
-**Gap**: the **building -> `shape_id` mapping is not known** — Round 29
-located and dumped the dispatcher (`fcn.00466e40`) but did not trace which
-buildings' placement checks pass which `shape_id`. Until that mapping is
-recovered, the clone has no original data to port for *which* buildings get a
+**Gap**: the **building -> `shape_id` mapping is not known** — the shape
+dispatcher was located in the original's code but which buildings' placement
+checks pass which `shape_id` was not traced. Until that mapping is recovered,
+the clone has no original data to port for *which* buildings get a
 non-footprint exclusion radius or how large. The clone's current
 `buildings.json[id].exclusion_shape` (`{"radius": N, "shape": "diamond"}` or
 `"square"`, checked as part of step 9 above) is a **placeholder
@@ -208,19 +203,16 @@ than hand-tuning radii. See Open questions.
 2. On left-mouse-down, record the start tile. While dragging, compute the
    tile-to-tile path the drag implies (typically: an L-shaped or straight
    line from start to current hover tile — the original had a similar
-   per-drag path-building entry point, see `documentation/03-exe-analysis.md`
-   Round 15).
+   per-drag path-building entry point, confirmed by RE analysis).
 3. For each tile pair along the implied path, check the "can network N step
    from A to B" rule ([world-and-maps.md](world-and-maps.md)). Render
    per-tile highlights: valid segments blue, invalid segments red.
 4. On mouse-up: if the **entire** dragged path is valid, issue a
    `BuildPathwayCommand` for each segment (deduct cost — see
    [simulation.md](simulation.md), default cost-per-tile from `config.json`;
-   the original used a flat cost of 1000 for all network types, see
-   `documentation/03-exe-analysis.md` Round 15). If any segment is invalid,
-   the whole drag is rejected (no partial builds) — matches the original's
-   "pay only follows a fully-valid build" structure (see
-   `documentation/03-exe-analysis.md` Round 17).
+   the original used a flat cost of 1000 for all network types). If any
+   segment is invalid, the whole drag is rejected (no partial builds) —
+   matches the original's "pay only follows a fully-valid build" structure.
 5. On commit, update the connectivity grid for every affected tile (both
    endpoints of each segment, per [world-and-maps.md](world-and-maps.md)'s
    "Building/extending a pathway segment" algorithm) and mark affected tiles
@@ -228,43 +220,37 @@ than hand-tuning radii. See Open questions.
 
 ### Drag-path computation
 
-Round 29 (`documentation/03-exe-analysis.md`) confirmed `fcn.0049e5a0`
-converts both drag endpoints to tile coordinates and builds/extends a
-**segment list** from the raw endpoints via a helper chain
-(`fcn.416750`/`fcn.4168c0`/`fcn.4a1880`) — i.e. the original is **not** running
-a general per-drag A* search, so a full pathfinding-based "snap to nearest
-valid route" drag is confirmed unnecessary. This much is a port-validated
-fact, not an approximation.
+RE analysis confirmed that the original converts both drag endpoints to tile
+coordinates and builds/extends a **segment list** from the raw endpoints via
+a helper chain — i.e. the original is **not** running a general per-drag A*
+search, so a full pathfinding-based "snap to nearest valid route" drag is
+confirmed unnecessary. This much is a port-validated fact, not an
+approximation.
 
 **Gap**: the *exact segment shape* — whether the original ever produces more
 than one segment, and if so the precise tie-breaking rule for orientation
 (horizontal-first vs. vertical-first, how it picks between the two possible L
-orientations, edge-case behavior at map boundaries) — depends on
-`fcn.416750`/`fcn.4168c0`/`fcn.4a1880`/`fcn.46d180`'s internals, which weren't
-decoded further. The clone's **two-segment L-path (horizontal-then-vertical or
-vertical-then-horizontal, whichever has fewer invalid tiles)** is therefore a
-**stand-in for an unconfirmed tie-break rule**, not a deliberate UX choice
-known to match the original — the original could just as well always be
-"horizontal-first" or use some other deterministic rule. Until
-`fcn.416750`/`fcn.4a1880` are decoded, treat the L-path's tie-break as
-unverified; see Open questions.
+orientations, edge-case behavior at map boundaries) — depends on internal
+helper functions that weren't decoded further. The clone's **two-segment
+L-path (horizontal-then-vertical or vertical-then-horizontal, whichever has
+fewer invalid tiles)** is therefore a **stand-in for an unconfirmed tie-break
+rule**, not a deliberate UX choice known to match the original — the original
+could just as well always be "horizontal-first" or use some other
+deterministic rule. The L-path's tie-break should be treated as unverified;
+see Open questions.
 
 ## Sound feedback
 
 Per [audio.md](audio.md), a "spend" sound cue plays on any successful
 treasury debit (building purchase, pathway construction), played only for
-the local human player's transactions (matches the original, see
-`documentation/03-exe-analysis.md` Round 17).
+the local human player's transactions (matches the original's behavior).
 
 ## Open questions / RE gaps
 
-Most placement-legality internals are resolved at the RE level — see
-`documentation/08-investigation-needed.md` (item B14 and related) for the
-full derivation. The items below are the **specific remaining RE gaps**
-(not design decisions) that block a full port of `check_placement`; each is
-tracked in
-[`implementation/spec-deviations.md`](../implementation/spec-deviations.md)
-and `documentation/00-roadmap.md`'s spec-fidelity workstream:
+Most placement-legality internals are resolved at the RE level. The items
+below are the **specific remaining RE gaps** (not design decisions) that
+block a full port of `check_placement`; each is tracked in
+[`implementation/spec-deviations.md`](../implementation/spec-deviations.md):
 
 - **OPEN — `CapacityExceeded` denominator** (spec-deviations item 6): the
   numerator (`data.bldg.<episode>.<recipe_id>.cost`) is known, but the
@@ -272,17 +258,18 @@ and `documentation/00-roadmap.md`'s spec-fidelity workstream:
   it, there is no original comparison to port — confirm via dynamic analysis
   whether this check ever actually fires in practice before deciding the
   clone's behavior (no-op vs. designing a "capacity" mechanic around `cost`).
-- **OPEN — `TooManyBlockedNeighbors` reasons `0x10`/`0x11`**
-  (spec-deviations item 1): reason `0xe` is fully ported (step 5 above), but
-  the original's full predicate also folds in a second "diagonal-blocked"
-  counter and per-tile corner flags whose exact thresholds weren't isolated —
-  the original is confirmed **stricter** than the `0xe`-only port.
+- **OPEN — `TooManyBlockedNeighbors` additional checks**
+  (spec-deviations item 1): the primary blocked-neighbor check is fully
+  ported (step 5 above), but the original's full predicate also folds in a
+  second "diagonal-blocked" counter and per-tile corner flags whose exact
+  thresholds weren't isolated — the original is confirmed **stricter** than
+  the primary-only port.
 - **OPEN — `SpecialAdjacencyFailed` per-category rules**
   (spec-deviations item 7): `defa.type` ∈ {`bpro`,`bdem`,`bdep`,`bres`} is
   known for all 153 buildings, but what each category's adjacency check
   actually *requires* (the dispatch branches' effects, plus two
-  runtime-initialized type-tag globals) wasn't decoded — `requires_adjacent_type`
-  has no rule to populate yet.
+  runtime-initialized type-tag values) wasn't decoded —
+  `requires_adjacent_type` has no rule to populate yet.
 - **OPEN — exclusion-radius `shape_id` mapping** (spec-deviations item 2):
   the 4 shape tables' row data is extracted, but which buildings use which
   `shape_id` (or none) wasn't traced — the clone has no original data for
@@ -290,5 +277,5 @@ and `documentation/00-roadmap.md`'s spec-fidelity workstream:
 - **OPEN — drag-path segment tie-break rule** (spec-deviations item 3): the
   original builds a segment list (not A*) from raw drag endpoints, confirming
   no general pathfinding is needed, but the precise orientation/tie-break
-  rule inside `fcn.416750`/`fcn.4a1880`/`fcn.46d180` wasn't decoded — the
-  clone's two-segment L-path heuristic is unverified against it.
+  rule in the segment-building helpers wasn't decoded — the clone's
+  two-segment L-path heuristic is unverified against it.

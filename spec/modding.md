@@ -3,7 +3,7 @@
 This document specifies OpenTE's modding strategy: how mods are structured,
 discovered, loaded, and how they interact with the legally-required
 extractor split (see [overview.md](overview.md)). The goal — per
-`documentation/07-clone-architecture.md` — is for modders to add or change
+the project's architecture document — is for modders to add or change
 commodities, buildings, recipes, tech trees, maps, and assets **by editing
 data files and dropping in replacement assets, without recompiling the
 game**.

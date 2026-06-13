@@ -8,8 +8,8 @@ approaches. It is **not** a description of the original game's internals.
 Where a design decision is directly informed by the original game's
 behavior (e.g. an economy formula players expect to feel familiar, or a
 building-placement rule), this spec states the *behavior* to replicate and,
-where useful, cross-references the reverse-engineering notes in
-`documentation/` for ground truth. It does not describe how the original
+where useful, notes that the behavior is confirmed by RE analysis. It
+does not describe how the original
 *implements* that behavior unless the implementation detail itself is worth
 reusing.
 
@@ -92,8 +92,7 @@ while (running) {
 }
 ```
 
-The original ran its simulation at a fixed per-tick rate driven by
-`SilkRoadGame::Tick` (see `documentation/03-exe-analysis.md` Round 8); the
+The original ran its simulation at a fixed per-tick rate; the
 clone reproduces "one simulation tick = one unit of game-rule time" (prices
 drift per tick, animation scripts schedule re-entry by tick count, etc.) but
 decouples it from frame rate using the accumulator pattern above. The exact

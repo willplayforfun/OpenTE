@@ -109,8 +109,7 @@ second config file.
 ## Table catalog
 
 Each table below corresponds to one root table in the original
-`Data/data.{}` (see `documentation/02-data-catalog.md` for the
-reverse-engineered source). Field names are kept close to the originals
+`Data/data.{}`. Field names are kept close to the originals
 (also 4-letter codes) since they're already the modding vocabulary, but
 given descriptive JSON keys where the 4-letter code would be opaque.
 
@@ -193,10 +192,8 @@ given descriptive JSON keys where the 4-letter code would be opaque.
 ```
 
 This was previously a placeholder (`speed_class` -> "small constants table,
-clone picks its own numbers") and is now **resolved** — see
-`documentation/08-investigation-needed.md` T0.1.
-`epis.<ep>.tran` (`documentation/extracted/data_catalog_episode.md`, via
-`scripts/te_episode.py`) gives, for every transporter, exact `capa` (cargo
+clone picks its own numbers") and is now **resolved**.
+`epis.<ep>.tran` gives, for every transporter, exact `capa` (cargo
 capacity), `cost` (purchase price), `path` (network type the transporter
 itself needs to be based on, e.g. `cara`/`dock`/`port`), `tech` (advance that
 unlocks it), and a **per-network-type speed map**
@@ -211,7 +208,7 @@ in `ep01`/`ep02`), so `by_episode` is a per-episode map, like
 `episodes.json`, not a flat global table — the extractor populates it
 directly from `epis.<ep>.tran`. `depot_class` (`cara`/`barg`/`ship`/`engi`,
 from the root `tran` table) stays a flat top-level field since it's
-episode-invariant. The transporter chart (`Workstream E item 1`) is now
+episode-invariant. The transporter chart (from the original's manual) is now
 optional/low-priority — it would only add flavor-text corroboration, not new
 gameplay numbers.
 
@@ -242,14 +239,13 @@ gameplay numbers.
 }
 ```
 
-`excl` (confirmed values: `0` or `600` — the catalog's earlier "0/1" note was
-stale, see `documentation/08-investigation-needed.md` T0.6) is **not**
-carried forward as-is — its purpose is still unconfirmed (Tier 1 item B8:
-`0` consistently appears on the small set of "free at start" advances, `600`
-on the rest, but at least one counter-example (`tinc`, `pric=0`) means it's
-not simply "this advance costs money"). The extractor should pass it through
-as an opaque `extra.excl` field until B8 confirms its meaning, rather than
-mapping it to a named field that might be wrong.
+`excl` (confirmed values: `0` or `600`) is **not** carried forward as-is —
+its purpose is still unconfirmed: `0` consistently appears on the small set
+of "free at start" advances, `600` on the rest, but at least one
+counter-example (`tinc`, `pric=0`) means it's not simply "this advance costs
+money". The extractor should pass it through as an opaque `extra.excl` field
+until its meaning is confirmed, rather than mapping it to a named field that
+might be wrong.
 
 ### `tables/abilities.json` (from `abil`, 13 entries, indices 0-12)
 
@@ -307,8 +303,8 @@ The largest/most structurally complex table. Per episode:
 }
 ```
 
-- **`economy`** (new fields on `epis.<ep>`, `0x48`/float unless noted) —
-  resolved (Round 20, see `documentation/03-exe-analysis.md`):
+- **`economy`** (new fields on `epis.<ep>`, float unless noted) —
+  resolved:
   `growth_threshold`/`decline_threshold` (original `grow`/`decl`) feed
   [simulation.md](simulation.md)'s demand-tier tracking and vary per
   episode (most are `~1.15`/`~0.7-0.8`; `ep00`/`ep01` are more lenient at
@@ -321,19 +317,16 @@ The largest/most structurally complex table. Per episode:
   verbatim for now; revisit if early-episode economy feel needs tuning.
 
 - `obsolescence` corresponds to the original `supe`/`infe`/`remo` fields
-  (per `documentation/01-container-format.md` gotcha 11 / the embedded
-  player FAQ: "no one is going to pay for plain ceramics once dyed have been
-  invented"). The simulation uses this to phase out demand for superseded
+  (the original's FAQ explains: advances make old goods obsolete — no one
+  will pay for plain ceramics once dyed ceramics are invented). The simulation uses this to phase out demand for superseded
   goods — see [simulation.md](simulation.md).
-- **`demand`** (original `epis.<ep>.dmnd`) is **resolved** (see
-  `documentation/08-investigation-needed.md` T0.2): it's a
+- **`demand`** (original `epis.<ep>.dmnd`) is **resolved**: it's a
   `{building_type: {commodity: {weight, amount}}}` map — for each building
   type (e.g. `dwel`, `temp`, `zigg`), the set of commodities its
   population/operation demands per tick, each with an `amount` (per-tick
   consumption quantity, e.g. `dwel.rice.amount=4`) and a `weight` (1 for
   staples, 2-15 for luxuries — exact scaling formula not yet confirmed, but
-  the shape is solid). See `extracted/data_catalog_episode.md` "Building
-  commodity demand (`dmnd`)". This directly drives
+  the shape is solid). This directly drives
   [simulation.md](simulation.md)'s production/consumption model — no more
   "raw bytes" placeholder.
 - **`movement_costs`** (original `epis.<ep>.path`, renamed from
@@ -477,9 +470,9 @@ keep re-prompting until valid input or cancel.
 
 The original's economy formula depends on four named config constants
 (`PSCA`/`PSCT`/`PSFA`/`PSFT`, see [simulation.md](simulation.md)) — these
-are real `0x48`/float fields on `data.{}`'s root `game` table
-(`psca=0.04`/`psct=0.06`/`psfa=0.04`/`psft=0.08`, confirmed
-`documentation/03-exe-analysis.md` Round 20) and the extractor reads them
+are float fields on `data.{}`'s root `game` table
+(`psca=0.04`/`psct=0.06`/`psfa=0.04`/`psft=0.08`, confirmed by RE analysis)
+and the extractor reads them
 directly from there, plus a few others (`futx`/`futy` defaults, restock
 period, etc.) not yet wired up. The clone collects all such constants into a
 single `tables/config.json` (or `game_data/config.json` at the top level)
@@ -491,11 +484,10 @@ would want to tweak.
 ## Open questions / RE gaps
 
 - **`tech.<ep>.<id>.excl`** (`0` or `600`) — purpose unknown; passed through
-  opaquely (see above). Tier 1 item B8.
+  opaquely (see above).
 - **`game` table** (global engine constants like cursor timing/UI colors) —
   not modeled; the clone has its own UI/engine config.
 
 (Resolved: `epis.<ep>.dmnd` -> `demand`, `epis.<ep>.path` -> `movement_costs`,
 and transporter speed/capacity/network-access -> `transporters.json`'s
-`by_episode.<ep>.speed` — see "Table catalog" above and
-`documentation/08-investigation-needed.md` T0.1/T0.2/T0.3.)
+`by_episode.<ep>.speed` — see "Table catalog" above.)

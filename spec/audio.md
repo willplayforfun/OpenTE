@@ -3,7 +3,7 @@
 This document specifies the clone's audio: sound effects, music, and the
 events that trigger them. The original uses Miles Sound System
 (`mss32.dll`) to play MP3-framed audio from `Data/musi.{}` (20.3MB) and
-`Data/soun.{}` (10.5MB) (`documentation/04-other-formats.md`); per-track
+`Data/soun.{}` (10.5MB); per-track
 offsets within these containers were not enumerated. The clone uses **SDL2_mixer**
 (add to `vcpkg.json`) and does not depend on extracting the original's
 audio container internals beyond slicing out individual track files.
@@ -55,14 +55,14 @@ public:
 
 ## Sound cue triggers
 
-Cross-referencing identified in `documentation/03-exe-analysis.md`:
+Cross-referencing identified from RE analysis of the original:
 
 | Event | Original cue (decoded 4cc tags) | Clone trigger |
 |---|---|---|
-| Treasury debited (building/pathway purchase, by local human player only) | `'spnd'`/`'inte'`/`'soun'` ("ka-ching") | `AudioSystem::play_sfx("ui.purchase")` on successful `PlaceBuildingCommand`/`BuildPathwayCommand` for the human player ([input.md](input.md), Round 17) |
-| Demand growing for a commodity | `'soun'`/`'evnt'` notification (Round 4-7) | `AudioSystem::play_sfx("market.demand_up")` on `MarketEvent::DemandGrowing` ([simulation.md](simulation.md)) |
+| Treasury debited (building/pathway purchase, by local human player only) | `'spnd'`/`'inte'`/`'soun'` ("ka-ching") | `AudioSystem::play_sfx("ui.purchase")` on successful `PlaceBuildingCommand`/`BuildPathwayCommand` for the human player ([input.md](input.md)) |
+| Demand growing for a commodity | `'soun'`/`'evnt'` notification | `AudioSystem::play_sfx("market.demand_up")` on `MarketEvent::DemandGrowing` ([simulation.md](simulation.md)) |
 | Demand declining | (symmetric) | `AudioSystem::play_sfx("market.demand_down")` |
-| Building construction complete | toast message (Round 17 step 6) | `AudioSystem::play_sfx("ui.build_complete")` alongside the toast ([ui.md](ui.md)) |
+| Building construction complete | toast message | `AudioSystem::play_sfx("ui.build_complete")` alongside the toast ([ui.md](ui.md)) |
 | Placement invalid (click while `PlacementError != Ok`) | not identified in RE notes | `AudioSystem::play_sfx("ui.error")` — clean addition for UX clarity |
 
 Additional ambient/UI sounds (button clicks, unit movement) are clean

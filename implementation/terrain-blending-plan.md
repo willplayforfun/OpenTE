@@ -1,13 +1,12 @@
 # Terrain rendering — full B15 implementation plan
 
 **Status**: Stages A, B, C, and E are implemented (see
-`OpenTE/game/src/core/app.cpp`'s `App::render_terrain`/
-`render_shore_overlays`/`load_terrain_textures` and
+`OpenTE/game/src/render/terrain_renderer.cpp`'s `TerrainRenderer::render`/
+`render_edge_blends`/`render_shore_overlays`/`load_textures` and
 `OpenTE/tools/extractor/sprites/terrain.py`/`maps/region.py`). Stage D
 remains intentionally out of scope (see its section below). This document
-covers **all** of `documentation/08-investigation-needed.md` B15 (Rounds
-25-37) plus the related B7 (terrain-type/texture mapping) finding, organized
-as a staged build order. Stage 0 (the 3D mesh/heightmap/shading foundation)
+covers all terrain rendering RE findings (Rounds 25-37) plus the related
+terrain-type/texture mapping work, organized as a staged build order. Stage 0 (the 3D mesh/heightmap/shading foundation)
 was already implemented before this plan.
 
 Remaining open items (not blocking, see `rendering.md`'s
@@ -20,12 +19,12 @@ placeholder table):
 
 - **RESOLVED (B15 Round 40)**: the `tran`-family sprites ARE the edge-blend
   atlas. `[ebx+0x1bb8]` (= `tran`'s draw-side offset, `init_offset 0x1b3c +
-  0x7c`) is read inside `0x42acf0`'s 4-direction neighbor loop and bound as
+  0x7c`) is read inside the D3DRasterizer's 4-direction neighbor loop and bound as
   the texture for up to 4 additional per-tile draw calls (one per
   differently-textured neighbor direction), each reusing the base quad's
   geometry with new UVs selecting one of the `tran` atlas's 4x4 (`0.25`-UV)
   cells. `terr/edge` is unrelated — it's read separately at draw-offset
-  `+0x1c28` by the small standalone `fcn.0x42b600`. Stage B should be
+  `+0x1c28` by a small standalone function. Stage B should be
   rewritten around the `tran`-atlas/4-direction mechanism; see
   `03-exe-analysis.md` Round 40 for the full writeup and the still-open
   "which of the 4 directions maps to which `[ebx+0x14]` array slot / which
@@ -187,7 +186,7 @@ free, just needs to match `terrain_textures.json`'s sprite ids).
 ### A.3 — Decode the `terr/sets/<N>` palette record -> 13-slot table
 
 **RESOLVED (B15 Round 39, corrects an earlier Round 38 misreading)** — exact
-destination-offset re-read of `fcn.0x466790`'s init order
+destination-offset re-read of the terrain-palette init function's order
 (`exe_b15_round36_init.txt`, 28-byte/`0x1c` stride from `hidd` at `esi+0`),
 cross-checked against `OpenTE/tools/extractor/sprites/terrain.py`'s
 already-correct `_TEXTURE_PAGE_SOURCES` table (from a prior session with
@@ -204,7 +203,7 @@ field:  deep  seas  alps  bld0  bld1  bld2  hill  mntn  undr  soil  (none)   dsr
   `mapp.terr`. Per the user (2026-06-12), `terr/hidd` is a starfield texture
   tiled *behind* the map (visible past its edges), not a fog-of-war overlay.
   OpenTE doesn't need it for the current per-tile texture-page work.
-- **Index 11** (`esi+0x134`) is **never written** by `fcn.0x466790` — no
+- **Index 11** is **never written** by the terrain-palette init function — no
   `terr.sets` field maps to it. Leave it unmapped (renderer falls back to
   flat shading for `texture_index == 11`), matching `terrain.py`.
 - **Index 13 = `dsr1`**, not `tran`. `tran` (and its palette variants
@@ -254,7 +253,60 @@ with up to 13 distinct ground textures (vs. today's 7), continuously tiled
 with no per-tile seams, still smooth 3D mesh with slope shading. Ask the
 user for a screenshot to sanity-check the palette choice (A.4).
 
-## Stage B — Edge-blend passes (feathered neighbor-texture overlay)
+## Stage B — Edge-blend passes (feathered neighbor-texture overlay) — IMPLEMENTED
+
+**Status (2026-06-13)**: implemented in
+`TerrainRenderer::render_edge_blends` (`terrain_renderer.cpp`), gated by
+`terrain_blending_enabled` (B.5). The extractor
+(`tools/extractor/sprites/terrain.py`) extracts `terr/trch` (the `chi1`
+palette's `tran` field, per `data_catalog_terr_sets.txt` set 16) as
+`terrain.tran`, full 256x256 resolution, and records it in
+`terrain_textures.json`'s `"tran"` field. Per-tile candidate detection (B.2)
+and the cell-selection UV formula (B.3, `col = nbr & 3, row = nbr >> 2`,
+`(cell*64+0.5)/256` with a half-texel inset on both edges) are implemented as
+specified below.
+
+**Update (2026-06-13, full disassembly of the D3DRasterizer's corner-rotation
+arithmetic)**: the
+per-direction corner rotation is now derived rather than placeholder. The
+original copies the tile's 6-vertex (2-triangle, fan-style: center + 4
+corners + repeated first corner) geometry into a scratch buffer and rewrites
+only vertices 1-4's (the 4 corners') `tu`/`tv`. For direction `dir` (1/3/5/7
+= N/E/S/W), let `k_raw = ((dir+1)&7)>>1` (N->1, E->2, S->3, W->0). Tile corner
+`j` (NW=0,NE=1,SE=2,SW=3) is assigned `tran`-cell corner `m = (j - k) mod 4`,
+where `corner_uv[m]` for `m=0..3` is `(u1,v1),(u0,v1),(u0,v0),(u1,v0)`
+(`u0,v0` = the cell's near-edge UV, `u1,v1` = its far-edge UV, both with the
+half-texel inset from B.3). This is implemented as `kEdgeBlendK` + the
+`corner_u`/`corner_v`/`m` logic in `render_edge_blends`. (Vertex 0, the fan's
+center vertex, gets the cell's center UV in the original but has no
+equivalent in this renderer's 2-triangle-via-index-buffer quad, so it's
+dropped — only the 4 corners matter for a flat-shaded quad.)
+
+**Update (2026-06-13, visual check)**: `k_raw = {1,2,3,0}` (using vertex-slot
+index directly as screen corner `j`) rendered the whole pattern rotated 90
+degrees from correct. The first correction tried (`k_raw - 1 = {0,1,2,3}`)
+was still off by 90 degrees the other way; the working value is
+`kEdgeBlendK = {2,3,0,1}` (`k_raw + 1`) — i.e. the EXE's vertex-slot-to-
+screen-corner mapping has a cyclic offset of -1 (`j = (vertex_slot - 1) mod
+4`). This is now `kEdgeBlendK`'s value in `terrain_renderer.cpp`.
+
+**Update (2026-06-13, scale)**: with the rotation fixed, the dissolve dots
+looked noticeably smaller/denser than the base terrain texture's features.
+Sampling the *full* 64px `tran` cell (`u1 = u0 + 63/256`, the raw EXE
+formula) onto the same screen quad as the base pass gives a ~1x:1x
+(horizontal) / ~1x:0.5x (vertical) atlas-px-to-screen-px ratio, vs. the base
+pass's 2x:2x (32x16px atlas region -> 64x32px screen diamond,
+terrain-blending-plan.md Stage A.0). To match that apparent scale, only half
+of each cell (32x32px, `kTranSampleUV = 32/256`) is sampled per tile now —
+see `kTranSampleUV`'s doc comment in `terrain_renderer.cpp`. This is an
+empirical visual-match adjustment, not derived from the disassembly (the EXE
+itself samples the full cell — it may rely on a different screen-quad size
+for the edge-blend pass that we haven't identified).
+
+Other palettes' `tran`/`tr14`/`tr15`/`tr17` atlases are not yet
+extracted/selected per-episode (only `ep01_china`/`chi1` is). B.1/B.4 (the
+`terr/edge`-based plan) are superseded by Round 40's `tran`-atlas finding and
+no longer apply.
 
 > **CORRECTION (B15 Round 40, 2026-06-13)**: B.1-B.5 below were written
 > assuming the edge-blend atlas is `terr/edge` with cells selected by the
@@ -263,17 +315,17 @@ user for a screenshot to sanity-check the palette choice (A.4).
 > (a 4x4 dithered-dissolve atlas, one per palette — `tr14`/`tr15`/`tr17`/
 > `trch`/`tran`), each cell is exactly `0.25x0.25` UV (with a half-texel
 > inset), and the cell is selected by the **direction index** (1/3/5/7) via
-> a modular-arithmetic formula in `0x42acf0` (lines 84-124 of
-> `exe_blend_draw_dump.txt`), NOT by the neighbor's texture index. `terr/edge`
+> a modular-arithmetic formula in the D3DRasterizer (from the disassembly
+> dump), NOT by the neighbor's texture index. `terr/edge`
 > is unrelated — a separate single texture read at draw-offset `+0x1c28` by
-> a different, tiny function (`fcn.0x42b600`), likely a map-border/skirt
+> a different, tiny function, likely a map-border/skirt
 > texture, out of scope here. **B.1-B.5 need a rewrite** around the `tran`
 > atlas before implementation — in particular B.1's atlas-content
 > description, B.3's UV-cell-per-neighbor scheme (replace with UV-cell-per-
 > direction), and B.4's `terr/edge`-specific fallback. The gating condition in
 > B.2 (same-class, different-index neighbor) and B.5 (option toggle) remain
 > correct. The exact direction->cell mapping needs one more disassembly pass
-> (the `and 0x80000003`/`sar`-based arithmetic at lines 84-124) before B.3 can
+> (the modular arithmetic in the disassembly) before B.3 can
 > be written precisely — left as a follow-up for whoever picks up Stage B.
 
 **Goal**: implement the up to 4 additional draw passes (directions 1, 3, 5,
@@ -381,7 +433,7 @@ no edge-blend; that's Stage C's job).
 **Goal**: implement the up to 2 additional passes that draw shore/beach
 transition art at water/land boundaries, using the
 `LUT0`/`LUT85`/shape/UV-index tables from
-`documentation/extracted/exe_b15_round37_shore_tables.txt`.
+`the extracted shore-overlay tables (RE artifacts)`.
 
 ### C.1 — Extract `terr/coa0` and `terr/coa1`
 
@@ -412,7 +464,7 @@ water-*class* check which is `<=2`).
 - If `overlay1_code != 255`: draw shore-overlay pass 1 — `SDL_Vertex[4]`
   with UVs from `UV-index array[overlay1_code]` (each entry is `(idx0,idx1)`
   in 2-15, used as `idx/16` cell anchors into the 16x16 atlas — i.e. cell
-  size `1/16` in atlas-UV space, same `float array @ 0x5f88f0`
+  size `1/16` in atlas-UV space, same float-array table
   `{0/16..16/16}` table gives the exact corner coordinates). `SDL_RenderGeometry`,
   `SDL_BLENDMODE_BLEND`, atlas = `coa0` or `coa1` per above.
 
@@ -533,7 +585,7 @@ slope-shading vertex colors).
 6. **C.2/C.3**: precise bit-layout of the water-neighbor `mask` and
    corner-derived `flags`, and the exact `LUT0`/`LUT85`/shape/UV-index
    composition — all should be re-derived directly from
-   `documentation/extracted/exe_b15_round37_shore_tables.txt` during
+   `the extracted shore-overlay tables (RE artifacts)` during
    implementation rather than from this plan's paraphrase, which may have
    simplified/elided details.
 

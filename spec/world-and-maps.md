@@ -9,7 +9,7 @@ pathfinding ([entities.md](entities.md)) and building placement
 ## Coordinate system
 
 - The world is a **128x128 tile grid** per region (matches every original
-  map observed — `documentation/04-other-formats.md`). The clone keeps this
+  map observed). The clone keeps this
   size as the default but should not hardcode it where avoidable (store
   `width`/`height` in the map file).
 - **Tile coordinates** are integers `(tx, ty)`, `0 <= tx < width`,
@@ -81,12 +81,12 @@ Notes:
 - **`heightmap.data`** is the original's `mapp.alti` byte grid, carried
   through verbatim: a 1-byte-per-tile, row-major grid (`encoding:
   "raw-base64"` = the raw bytes, base64-encoded, no RLE). `alti` is a
-  genuine per-tile heightfield (not rendering noise) — see
-  `documentation/08-investigation-needed.md` B15 for the RE derivation. The
-  byte<->world-height conversion is `height_world_units = alti_byte * 10.0 /
-  256.0` (range `0.0..9.96`); `alti_byte >= 13` (`>= 0.5` units) is the
-  engine's "elevated tile" cutoff for walkability only — it has no
-  renderer-geometry consumer (B15 Round 33; there is no skirt/edge-cliff
+  genuine per-tile heightfield (not rendering noise), confirmed by RE
+  analysis. The byte<->world-height conversion is
+  `height_world_units = alti_byte * 10.0 / 256.0` (range `0.0..9.96`);
+  `alti_byte >= 13` (`>= 0.5` units) is the engine's "elevated tile" cutoff
+  for walkability only — it has no renderer-geometry consumer (there is no
+  skirt/edge-cliff
   rendering pass in the original or the clone). A per-map "sea level"/
   water-plane height should be derived from **that map's own `alti`
   minimum** — it varies widely per map, so don't derive it from `terr`-band
@@ -101,8 +101,8 @@ Notes:
   bytes (water/off-map tiles substitute `sea_level()`), displaced and
   slope-shaded per `render::kPixelsPerAltiUnit`/`kLightDir`/`kAmbient` in
   `render/iso.h`. The renderer also implements the original's multi-pass
-  texture-edge blending and shore overlays (B15 Rounds 35-37,
-  `terrain-blending-plan.md` Stages A-C/E) — see
+  texture-edge blending and shore overlays (`terrain-blending-plan.md`
+  Stages A-C/E) — see
   [rendering.md](rendering.md#texture-edge-blending-and-shore-overlays).
 - **`texture_index.data`** is a 1-byte-per-tile, row-major grid (same
   "base64-rle" encoding as `terrain.data`) of **texture-page indices**
@@ -120,8 +120,7 @@ Notes:
   entities. `culture`/`decoration_id` select which sprite from the
   extracted decoration set to use — the exact `decoration_id -> sprite`
   mapping is part of `tables/decorations.json` (extracted from the
-  per-culture decoration sprite sheets, see `04-other-formats.md`'s
-  `bldg.{}`/`unit.{}` notes).
+  per-culture decoration sprite sheets).
 - **`regions`** describe per-player starting areas within a map (some
   episodes are multi-region). `headquarters` is the starting depot/HQ
   placement.
@@ -141,8 +140,8 @@ Every tile has:
    tile, and in which of the 8 directions. This is **mutable at runtime**:
    building a road/rail/canal segment updates the mask for the affected
    tiles (and their neighbors), exactly mirroring the original's incremental
-   "connectivity hash map" update on path-segment commit
-   (`documentation/03-exe-analysis.md` Round 17/18).
+   "connectivity hash map" update on path-segment commit (confirmed by RE
+   analysis).
 
 ### Modern representation
 
@@ -173,7 +172,7 @@ easy cross-checking against RE notes):
 ### "Can network N step from tile A to tile B?" rule
 
 This is the rule the original's `RoadFinderIterator`/`TrailFinderIterator`
-etc. implement (Round 15/16), reproduced here for the clone:
+etc. implement, reproduced here for the clone:
 
 - **Trail**: `(trail_extra | road) & (1 << dir)` must be set on tile A.
 - **Road**: `road & (1 << dir)` must be set on tile A.
@@ -291,11 +290,11 @@ compatible across format versions in the spike; add a migration system only
 once there's a real save-compatibility need (per CLAUDE.md guidance against
 speculative compatibility shims).
 
-The original's save format (`game.regi.<region>.enti`/`furn`/`ghos`/`dist`,
-documented in `documentation/04-other-formats.md`) is **not** the clone's
-save format — it's referenced here only as a source of *what state needs to
-be captured* (entity types, market inventory, merchant order queues, etc.),
-which directly shapes the entity schema in [entities.md](entities.md).
+The original's save format (`game.regi.<region>.enti`/`furn`/`ghos`/`dist`)
+is **not** the clone's save format — it's referenced here only as a source
+of *what state needs to be captured* (entity types, market inventory,
+merchant order queues, etc.), which directly shapes the entity schema in
+[entities.md](entities.md).
 
 ## Open questions / RE gaps
 
@@ -306,15 +305,14 @@ which directly shapes the entity schema in [entities.md](entities.md).
   data, but **what each band actually represents** (which of the clone's
   `TerrainType` values, if any band maps to more than one) and the
   `m_ui,u.{}` `terr/ts*` texture-selection table's correspondence to those
-  bands were never cross-referenced — e.g. whether the EXE has a literal
-  terrain-id -> texture-name lookup table is unknown. The current 4-band ->
-  `{water, plains, hills, mountains}` mapping the extractor uses is a
-  **guess pending that cross-reference**, not a confirmed-good "coarse"
+  bands were never cross-referenced — e.g. whether the original has a
+  literal terrain-id -> texture-name lookup table is unknown. The current
+  4-band -> `{water, plains, hills, mountains}` mapping the extractor uses
+  is a **guess pending that cross-reference**, not a confirmed-good "coarse"
   result with low-risk refinement later — a wrong band/type pairing could
   mean e.g. "desert" tiles are extracted as "plains". The map JSON schema is
   unaffected either way (only the extractor's mapping table changes), but
   this is tracked as a real open RE question, not a deferred polish item.
-  See `documentation/00-roadmap.md`'s spec-fidelity workstream.
 - **OPEN — Pre-existing trails from terrain data** (RE gap,
   [`implementation/spec-deviations.md`](../implementation/spec-deviations.md)
   item 9): whether the original pre-populates any `trail_extra` connectivity
@@ -325,7 +323,7 @@ which directly shapes the entity schema in [entities.md](entities.md).
   a confirmed match to the original. If a map turns out to need pre-existing
   trails to be playable (e.g. matching `enti`-derived starting state from
   workstream G/H), that would indicate the original does pre-populate
-  connectivity. See `documentation/00-roadmap.md`'s spec-fidelity workstream.
+  connectivity.
 - **Determinism for multiplayer/replay**: if lockstep multiplayer or
   deterministic replay is ever desired, float tile coordinates and
   non-deterministic floating-point summation order could cause desyncs.
@@ -333,4 +331,4 @@ which directly shapes the entity schema in [entities.md](entities.md).
   partly for this reason. Revisit in [implementation/](../implementation/)
   if multiplayer becomes a goal.
 - **Decoration sprite mapping** (`culture` + `decoration_id` -> sprite) is
-  not yet extracted — see `04-other-formats.md`'s `bldg.{}`/`flor.{}` notes.
+  not yet extracted.

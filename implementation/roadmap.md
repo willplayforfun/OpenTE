@@ -5,7 +5,7 @@ intermediate/temporary state** for OpenTE. It does not describe target
 architecture or final behavior — that's the [`OpenTE/spec/`](../spec/)
 directory. Update this doc as stages complete; it's the shared
 session-to-session handoff for "what's next" on the OpenTE side (parallel
-to `documentation/00-roadmap.md` for the RE side).
+to the RE-side roadmap for context).
 
 ## Status
 
@@ -57,12 +57,11 @@ builds directly on the previous stage's vertical slice.
 - Extend the extractor (`tools/extractor/`) to:
   - Extract **all** `data.{}` tables per [data-model.md](../spec/data-model.md)
     (`commodities.json`, `buildings.json`, `transporters.json`, etc.) —
-    most table extractors already exist as `documentation/scripts/te_*.py`
+    most table extractors already exist as standalone RE scripts
     and need porting (already done for `comm` in the spike; port `bldg`,
     `tran`, `band`, `guar`, `tech`/`epis.tech`, `abil`, `epis`, `even`).
   - Extract **one map** (`Maps/ep01 China.{}` is a good first target — it's
-    the file already used to validate the `elem`/`mapp` decoders in
-    `documentation/04-other-formats.md`) to
+    the file already used to validate the `elem`/`mapp` decoders) to
     `game_data/maps/ep01_china.json` per
     [world-and-maps.md](../spec/world-and-maps.md). Terrain-band ->
     terrain-type mapping can be a coarse placeholder (see spec Open
@@ -199,26 +198,17 @@ delete them — git history retains the record).
 | Road/trail tiles use flat debug overlay, not real connection-sprite variants | Stage 3 | [rendering.md](../spec/rendering.md) |
 | Economy tuning constants (`PSCA` etc.) are first-guess values | Stage 4 | `tuning-log.md` (create when Stage 4 starts) |
 | Merchant orders issued manually, no AI | Stage 5 | [opponent-ai.md](../spec/opponent-ai.md) |
-| Starting buildings/resources/merchants for a region: extract real `enti` table from a matching save (`scripts/te_save.py`) where available; otherwise scatter `bres` per `epis.<ep>.regi.<id>.grou` quotas on non-water tiles | Stage 1 | `documentation/09-episode-population.md` (workstream H, in progress) |
+| Starting buildings/resources/merchants for a region: extract real `enti` table from a matching save where available; otherwise scatter `bres` per `epis.<ep>.regi.<id>.grou` quotas on non-water tiles | Stage 1 | RE workstream H (episode population, in progress) |
 | UI is flat-color placeholders; UI sprites (`a_ui`/`d_ui`/`m_ui`) are extracted but not wired into widgets | All UI stages | [ui.md](../spec/ui.md) Open questions (T0.4, extraction done, wiring pending) |
 | Single-region only | Stages 1-7 | Stage 8 |
-| Shore-overlay UV mapping (`kShoreUvIndex` cell -> diamond-quad UV rect) is a documented square-to-diamond approximation pending visual validation against the original; "decal" pass (Stage D) deferred indefinitely pending Stage 3 pathway rendering | Stage 1 (terrain-blending-plan.md Stages A-C/E done) | [rendering.md](../spec/rendering.md#texture-edge-blending-and-shore-overlays), [terrain-blending-plan.md](terrain-blending-plan.md) |
+| Shore-overlay UV mapping (`kShoreUvIndex` cell -> diamond-quad UV rect) is a documented square-to-diamond approximation pending visual validation against the original; edge-blend (`tran` atlas, Stage B) per-direction corner rotation (`kEdgeBlendK`) is now derived from `0x42acf0`'s disassembly but the vertex-to-screen-corner and array-slot-to-direction conventions are assumed, not confirmed -- pending visual validation, and only the `ep01_china`/`chi1` `tran` atlas is extracted (other palettes' `tran`/`tr14`/`tr15`/`tr17` not yet per-episode); "decal" pass (Stage D) deferred indefinitely pending Stage 3 pathway rendering | Stage 1 (terrain-blending-plan.md Stages A-C/E done) | [rendering.md](../spec/rendering.md#texture-edge-blending-and-shore-overlays), [terrain-blending-plan.md](terrain-blending-plan.md) |
 
-**Note (2026-06-11, see `documentation/08-investigation-needed.md` Tier 0):**
-Stage 1's map extraction and Stage 4's economy/production placeholders can
-now use real decoded data instead of guesses: `episodes.json.demand`
-(per-building commodity demand), `episodes.json.movement_costs`
-(per-pathway-type movement costs), and `transporters.json.by_episode.<ep>`
-(per-episode transporter speed/capacity/network-access) are all resolved —
-see [data-model.md](../spec/data-model.md)'s Table catalog. Terrain-band ->
-terrain-type mapping (B7) and the economy tuning constants `PSCA`/etc (B2)
-remain open and still need placeholder values for Stages 1/4.
-
-## Cross-reference
-
-For RE ground-truth backing any of the above (economy formula derivation,
-placement-legality decode, connectivity mask semantics, etc.), see
-`documentation/03-exe-analysis.md` Rounds 4-18 and
-`documentation/04-other-formats.md`. The spec docs in `OpenTE/spec/`
-already cite the relevant rounds inline — use those citations rather than
-re-deriving from the raw RE notes.
+**Note (2026-06-11):** Stage 1's map extraction and Stage 4's
+economy/production placeholders can now use real decoded data instead of
+guesses: `episodes.json.demand` (per-building commodity demand),
+`episodes.json.movement_costs` (per-pathway-type movement costs), and
+`transporters.json.by_episode.<ep>` (per-episode transporter
+speed/capacity/network-access) are all resolved — see
+[data-model.md](../spec/data-model.md)'s Table catalog. Terrain-band ->
+terrain-type mapping and the economy tuning constants `PSCA`/etc remain open
+and still need placeholder values for Stages 1/4.

@@ -2,9 +2,8 @@
 
 This document specifies the clone's UI: widget framework, HUD, and the
 core dialogs (market, build menu, building info). The original implements
-roughly one C++ class per dialog (`T*Window` classes,
-`documentation/03-exe-analysis.md` RTTI inventory) backed by large UI
-resource containers (`a_ui`/`d_ui`/`m_ui`, `documentation/04-other-formats.md`)
+roughly one C++ class per dialog (`T*Window` classes from the RTTI
+inventory) backed by large UI resource containers (`a_ui`/`d_ui`/`m_ui`)
 whose pixel-level layout wasn't decoded. The clone does **not** attempt to
 replicate the original's pixel-exact UI — it specifies a small, modern,
 data-driven widget framework and the *set of screens* a playable clone
@@ -51,7 +50,7 @@ public:
   camera pan/zoom), per [rendering.md](rendering.md).
 - **Text rendering**: use `SDL_ttf` (add to `vcpkg.json`) with a bundled
   open-license font for UI text — the original's custom bitmap font format
-  (`Data/font.{}`, `04-other-formats.md`) is not worth reverse-engineering
+  (`Data/font.{}`) is not worth reverse-engineering
   for the clone; a real font renderer is strictly better (scalable,
   localizable, no glyph-atlas decoding needed).
 - **Sprite-skinning** (buttons, panel backgrounds, icons): drawn via
@@ -194,18 +193,16 @@ and `unlocks` summary; clicking researches (deducts cost).
 
 A small queue of transient on-screen messages (building complete,
 demand growing/declining alerts, event triggers) — corresponds to the
-original's "Building complete!" toast (`03-exe-analysis.md` Round 17) and
-demand-tier alerts (Round 4-7). Implementation: `UIManager::push_toast(text,
+original's "Building complete!" toast and demand-tier alerts.
+Implementation: `UIManager::push_toast(text,
 duration_ms)`, rendered as a fading label stack in a corner of the screen.
 
 ## Open questions / RE gaps
 
-- ~~**Original UI sprite extraction**~~ **Resolved** (T0.4 — see
-  `documentation/08-investigation-needed.md`): `a_ui,6.{}` (181 leaves,
-  RGB565), `d_ui,5.{}` (379 leaves, ARGB4444), and `m_ui,u.{}` (111 leaves:
-  93 RGBA8888 terrain textures + 18 palette RGBA) all decode with zero
-  fallbacks via `scripts/te_sprite.py` — see `01-container-format.md` "Pixel
-  formats"/"Two color-depth variants". Extraction is done; what remains is
+- ~~**Original UI sprite extraction**~~ **Resolved**: `a_ui,6.{}` (181
+  leaves, RGB565), `d_ui,5.{}` (379 leaves, ARGB4444), and `m_ui,u.{}` (111
+  leaves: 93 RGBA8888 terrain textures + 18 palette RGBA) all decode with
+  zero fallbacks via the sprite extractor. Extraction is done; what remains is
   **extractor wiring** (Stage 8, or pull forward if cheap) and mapping
   specific sprite IDs to specific widgets/dialogs (a UX/layout task, not
   RE). Until wired up, the clone's UI uses placeholder flat colors +

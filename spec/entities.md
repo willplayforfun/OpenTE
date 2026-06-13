@@ -1,11 +1,10 @@
 # Entities
 
 This document specifies the clone's entity model: entity types, the update
-loop, pathfinding, and merchant/market state. The original's entity system
-is a deep C++ class hierarchy (`SilkRoadEntity` -> `Entity`, with
-`Market`/`Character`/`Player`/`Signpost`/buildings as concrete types, each
-with a per-tick `Update` virtual — `documentation/03-exe-analysis.md` Round
-8). The clone reproduces the **set of entity kinds and their per-tick
+loop, pathfinding, and merchant/market state. The original's entity system is a deep C++ class hierarchy
+(`SilkRoadEntity` -> `Entity`, with `Market`/`Character`/`Player`/
+`Signpost`/buildings as concrete types, each with a per-tick `Update`
+virtual). The clone reproduces the **set of entity kinds and their per-tick
 behaviors** (since that's what defines gameplay) using a simpler,
 data-oriented design suited to C++20 rather than a deep virtual hierarchy.
 
@@ -41,9 +40,9 @@ avoids a giant variant/union in the hot `Entity` struct and lets each
 subsystem (economy, pathfinding, AI) iterate only the entities it cares
 about. This is a deliberate departure from the original's per-class virtual
 dispatch: the original needed runtime polymorphism because `Update` was
-called generically through 5 distinct implementations
-(`03-exe-analysis.md` Round 8's table); the clone's fixed-tick simulation
-can instead run **5 separate typed update passes** per tick:
+called generically through 5 distinct implementations; the clone's
+fixed-tick simulation can instead run **5 separate typed update passes** per
+tick:
 
 ```cpp
 void Simulation::tick(int tick_number) {
@@ -127,9 +126,8 @@ struct CommodityStack { std::string commodity_id; int quantity; };
 ```
 
 `TradeOrder`/`cargo` are a clean-room design informed by the original's
-`char.orde`/`invo`/`inve` sub-tables (`documentation/04-other-formats.md`,
-"most promising sub-table for reconstructing AI trade-route logic") — the
-original's exact field encoding is not needed, just the *concept* (a
+`char.orde`/`invo`/`inve` sub-tables — the original's exact field encoding
+is not needed, just the *concept* (a
 merchant has a queue of buy/deliver orders and carries cargo toward
 fulfilling them). See [opponent-ai.md](opponent-ai.md) for how orders are
 generated/consumed.
@@ -165,13 +163,12 @@ goal) request:
   (world-and-maps.md).
 - **Cost — OPEN RE GAP**
   ([`implementation/spec-deviations.md`](../implementation/spec-deviations.md)
-  item 10): the original's actual A* `DefaultCostCalculator` (`03-exe-
-  analysis.md` Round 15) used a flat per-tile cost of 1000 for every network
-  type — i.e. for the *vehicle pathfinder itself*, network choice doesn't
-  bias the route search; routing is uniform-cost. Separately,
-  `epis.<ep>.path` (now decoded as `episodes.json.movement_costs`, see
-  [data-model.md](data-model.md) and `documentation/08-investigation-needed.md`
-  T0.3) gives real, per-pathway-type, per-underlying-network costs (e.g. a
+  item 10): the original's actual A* `DefaultCostCalculator` used a flat
+  per-tile cost of 1000 for every network type — i.e. for the *vehicle
+  pathfinder itself*, network choice doesn't bias the route search; routing
+  is uniform-cost. Separately, `epis.<ep>.path` (now decoded as
+  `episodes.json.movement_costs`, see [data-model.md](data-model.md)) gives
+  real, per-pathway-type, per-underlying-network costs (e.g. a
   Trail-network transporter pays 2 to cross open ground but 0 if a road is
   already there; a Canal-network transporter pays 20-50 off-canal but 0
   on-canal). These are **two different systems**, and **`movement_costs`'s
@@ -189,8 +186,7 @@ goal) request:
   detouring via an existing road) — a player-visible difference in trade-route
   behavior, not just an internal implementation detail. Until
   `movement_costs`'s consumer is found, do not treat the clone's
-  richer-routing choice as settled; see Open questions and
-  `documentation/00-roadmap.md`'s spec-fidelity workstream. Per-network
+  richer-routing choice as settled; see Open questions. Per-network
   *speed* (tiles/tick, from `transporters.json`'s `by_episode.<ep>.speed`,
   T0.1) remains a separate *transporter* property controlling how fast a
   given path is traversed regardless of how this gap resolves. Diagonal steps
@@ -227,7 +223,6 @@ goal) request:
   playtesting suggests a visible difference, narrowing to bounding-box
   invalidation is the candidate fix, but confirming the original's actual
   behavior (if recoverable) should come first. See
-  `documentation/00-roadmap.md`'s spec-fidelity workstream.
 - Path-following: each tick, move a merchant `speed * dt` (tile-space)
   toward `path[path_index]`; on arrival within epsilon, advance
   `path_index`. On reaching the final waypoint, the merchant's current
