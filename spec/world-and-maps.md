@@ -39,6 +39,14 @@ pathfinding ([entities.md](entities.md)) and building placement
     "encoding": "base64-rle",
     "data": "..."
   },
+  "heightmap": {
+    "encoding": "raw-base64",
+    "data": "..."
+  },
+  "texture_index": {
+    "encoding": "base64-rle",
+    "data": "..."
+  },
   "regions": [
     {
       "id": "chin",
@@ -70,26 +78,43 @@ Notes:
   questions for the exact band mapping). This keeps the clone's terrain
   rendering/rules code working from a small, named, documented set instead
   of magic numbers.
-- The original's `mapp.alti` byte grid is **not yet** carried into the
-  clone's map format. An earlier RE pass treated it as rendering-only
-  jitter, but a re-check (see `documentation/08-investigation-needed.md`
-  B15) found it's a genuine per-tile heightfield, not noise: across all 74
-  `Maps/*.{}` files, `alti` is consistently 1.5x-12x smoother
-  (tile-to-tile) than the categorical `mapp.terr` grid, and the EXE's
-  `SilkRoadMap` loader (`method.SilkRoadMap.virtual_4` @ `0x4615a0`) loads
-  `alti` into a per-tile array structurally identical to (and loaded
-  alongside) `terr` — confirming it's live data, not vestigial. The initial
-  ep01-China-only finding that "water tiles cluster near `alti~=7-8` (sea
-  level) and the highest terrain band averages `alti~=112`" does **not**
-  generalize as a universal constant — per-map elevation ranges vary widely
-  (e.g. `ep06 Persepolis`'s lowest band averages `alti~=132`), and 15/74
-  maps have their lowest-`terr`-band tiles at a *higher* mean `alti` than
-  the rest of the map. Any "sea level" / water-plane height should be
-  derived **per-map** (e.g. from `alti`'s own minimum), not from a
-  `terr`-band lookup. B15 is the open investigation to find the
-  height->screen-pixel scale factor and add a `heightmap` field (mirroring
-  `terrain`'s `{encoding, data}` shape) plus the per-tile vertical offset and
-  height-difference "skirt" rendering it implies.
+- **`heightmap.data`** is the original's `mapp.alti` byte grid, carried
+  through verbatim: a 1-byte-per-tile, row-major grid (`encoding:
+  "raw-base64"` = the raw bytes, base64-encoded, no RLE). `alti` is a
+  genuine per-tile heightfield (not rendering noise) — see
+  `documentation/08-investigation-needed.md` B15 for the RE derivation. The
+  byte<->world-height conversion is `height_world_units = alti_byte * 10.0 /
+  256.0` (range `0.0..9.96`); `alti_byte >= 13` (`>= 0.5` units) is the
+  engine's "elevated tile" cutoff for walkability only — it has no
+  renderer-geometry consumer (B15 Round 33; there is no skirt/edge-cliff
+  rendering pass in the original or the clone). A per-map "sea level"/
+  water-plane height should be derived from **that map's own `alti`
+  minimum** — it varies widely per map, so don't derive it from `terr`-band
+  membership.
+
+  The `heightmap` field/schema and the `world::Region::height_at`/
+  `sea_level` accessors (`OpenTE/game/src/world/region.h`/`.cpp`) are
+  implemented and final. **The terrain renderer implements the per-vertex
+  height-displaced mesh** described in
+  [rendering.md](rendering.md#terrain-rendering): a `(width+1) x (height+1)`
+  grid of shared corner vertices, averaged from surrounding tiles' `alti`
+  bytes (water/off-map tiles substitute `sea_level()`), displaced and
+  slope-shaded per `render::kPixelsPerAltiUnit`/`kLightDir`/`kAmbient` in
+  `render/iso.h`. The renderer also implements the original's multi-pass
+  texture-edge blending and shore overlays (B15 Rounds 35-37,
+  `terrain-blending-plan.md` Stages A-C/E) — see
+  [rendering.md](rendering.md#texture-edge-blending-and-shore-overlays).
+- **`texture_index.data`** is a 1-byte-per-tile, row-major grid (same
+  "base64-rle" encoding as `terrain.data`) of **texture-page indices**
+  (`1-13`), the low nibble of the original's `mapp.terr` byte. It indexes
+  `tables/terrain_textures.json`'s 13-entry `pages` array (each entry a
+  sprite id for one 64x32 texture page, resolved from a `terr/sets/<N>`
+  palette — see `terrain-blending-plan.md` Stage A). `Region::
+  texture_index_at(tx, ty)` returns this value (clamped to `[1, 13]`; older
+  maps without this field default to `1` everywhere). Texture-page `<= 2` is
+  "water-class" (`seas`/`deep`), `> 2` is "land-class" — used by the
+  edge-blend and shore-overlay passes to decide whether two adjacent tiles
+  should blend directly or via a shore overlay.
 - **`decorations`** are static, non-interactive scatter objects (trees,
   rocks). They have no gameplay effect and are rendered behind/below
   entities. `culture`/`decoration_id` select which sprite from the
@@ -274,20 +299,33 @@ which directly shapes the entity schema in [entities.md](entities.md).
 
 ## Open questions / RE gaps
 
-- **Terrain band -> clone terrain-type mapping**: the original's `mapp.terr`
-  byte values cluster into bands (`2-8`, `33-40`, `64-70`, `96-102`) whose
-  exact meaning (and the texture-selection table in `m_ui,u.{}`) wasn't
-  cross-referenced. The extractor will need a reasonable
-  band-to-terrain-type mapping; until precise, a coarse mapping (band index
-  -> {water, plains, hills, mountains}) is sufficient to get a playable map,
-  with finer terrain types added later without changing the map JSON schema
-  (just refining the extractor's mapping table).
-- **Pre-existing trails from terrain data**: whether the original
-  pre-populates any `trail_extra` connectivity from terrain at map load, or
-  whether all pathway connectivity starts empty and is purely
-  player-constructed, is not confirmed. Default to "empty, fully
-  player-constructed" for the clone unless a map clearly needs pre-existing
-  trails to be playable.
+- **OPEN — Terrain band -> clone terrain-type mapping** (RE gap,
+  [`implementation/spec-deviations.md`](../implementation/spec-deviations.md)
+  item 8): the original's `mapp.terr` byte values cluster into 4 bands
+  (`2-8`, `33-40`, `64-70`, `96-102`), confirmed real groupings in the raw
+  data, but **what each band actually represents** (which of the clone's
+  `TerrainType` values, if any band maps to more than one) and the
+  `m_ui,u.{}` `terr/ts*` texture-selection table's correspondence to those
+  bands were never cross-referenced — e.g. whether the EXE has a literal
+  terrain-id -> texture-name lookup table is unknown. The current 4-band ->
+  `{water, plains, hills, mountains}` mapping the extractor uses is a
+  **guess pending that cross-reference**, not a confirmed-good "coarse"
+  result with low-risk refinement later — a wrong band/type pairing could
+  mean e.g. "desert" tiles are extracted as "plains". The map JSON schema is
+  unaffected either way (only the extractor's mapping table changes), but
+  this is tracked as a real open RE question, not a deferred polish item.
+  See `documentation/00-roadmap.md`'s spec-fidelity workstream.
+- **OPEN — Pre-existing trails from terrain data** (RE gap,
+  [`implementation/spec-deviations.md`](../implementation/spec-deviations.md)
+  item 9): whether the original pre-populates any `trail_extra` connectivity
+  from terrain at map load, or whether all pathway connectivity starts empty
+  and is purely player-constructed, was never investigated/confirmed — there
+  is no RE finding either way. The clone currently defaults to "empty, fully
+  player-constructed"; this is a **stand-in for an unanswered question**, not
+  a confirmed match to the original. If a map turns out to need pre-existing
+  trails to be playable (e.g. matching `enti`-derived starting state from
+  workstream G/H), that would indicate the original does pre-populate
+  connectivity. See `documentation/00-roadmap.md`'s spec-fidelity workstream.
 - **Determinism for multiplayer/replay**: if lockstep multiplayer or
   deterministic replay is ever desired, float tile coordinates and
   non-deterministic floating-point summation order could cause desyncs.

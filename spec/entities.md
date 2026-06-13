@@ -163,28 +163,38 @@ goal) request:
 - **Neighbors**: for tile `(tx,ty)`, the up-to-8 neighbors per the 8-direction
   table, filtered by the "can network N step from A to B" rule
   (world-and-maps.md).
-- **Cost**: the original's actual A* `DefaultCostCalculator` (`03-exe-
+- **Cost — OPEN RE GAP**
+  ([`implementation/spec-deviations.md`](../implementation/spec-deviations.md)
+  item 10): the original's actual A* `DefaultCostCalculator` (`03-exe-
   analysis.md` Round 15) used a flat per-tile cost of 1000 for every network
   type — i.e. for the *vehicle pathfinder itself*, network choice doesn't
-  bias the route search. Separately, `epis.<ep>.path` (now decoded as
-  `episodes.json.movement_costs`, see [data-model.md](data-model.md) and
-  `documentation/08-investigation-needed.md` T0.3) gives real,
-  per-pathway-type, per-underlying-network costs (e.g. a Trail-network
-  transporter pays 2 to cross open ground but 0 if a road is already there;
-  a Canal-network transporter pays 20-50 off-canal but 0 on-canal). These
-  appear to be **two different systems** — the EXE's A* itself is
-  uniform-cost, while `movement_costs` may feed a different consumer (UI
-  cost estimates, AI route scoring, or per-network speed rather than A*
-  cost) that wasn't identified.
-  The clone uses `movement_costs` as its A* edge-cost table (keyed by the
-  transporter's `path_type` and the destination tile's network), since it's
-  richer, already-decoded, real game-balance data and produces more
-  interesting routing ("prefer existing roads") than uniform cost — this is
-  a deliberate improvement over a literal port of the EXE's A*, not a
-  contradiction to resolve. Per-network *speed* (tiles/tick, from
-  `transporters.json`'s `by_episode.<ep>.speed`, T0.1) remains a separate
-  *transporter* property controlling how fast a given path is traversed.
-  Diagonal steps cost `sqrt(2) * base_cost` as usual.
+  bias the route search; routing is uniform-cost. Separately,
+  `epis.<ep>.path` (now decoded as `episodes.json.movement_costs`, see
+  [data-model.md](data-model.md) and `documentation/08-investigation-needed.md`
+  T0.3) gives real, per-pathway-type, per-underlying-network costs (e.g. a
+  Trail-network transporter pays 2 to cross open ground but 0 if a road is
+  already there; a Canal-network transporter pays 20-50 off-canal but 0
+  on-canal). These are **two different systems**, and **`movement_costs`'s
+  real consumer in the original was never identified** — it could be UI cost
+  estimates, AI route scoring, or per-network speed rather than A* cost.
+
+  The clone currently uses `movement_costs` as its A* edge-cost table (keyed
+  by the transporter's `path_type` and the destination tile's network). **This
+  is a stand-in pending identification of `movement_costs`'s real consumer,
+  not a confirmed-deliberate departure from the original.** If the original
+  really does route uniformly and only varies *speed* by network/transporter,
+  then AI merchants and the player's pathfinder in the original take routes
+  the clone's `movement_costs`-weighted A* would never choose (e.g. the
+  original might happily route across open ground where the clone insists on
+  detouring via an existing road) — a player-visible difference in trade-route
+  behavior, not just an internal implementation detail. Until
+  `movement_costs`'s consumer is found, do not treat the clone's
+  richer-routing choice as settled; see Open questions and
+  `documentation/00-roadmap.md`'s spec-fidelity workstream. Per-network
+  *speed* (tiles/tick, from `transporters.json`'s `by_episode.<ep>.speed`,
+  T0.1) remains a separate *transporter* property controlling how fast a
+  given path is traversed regardless of how this gap resolves. Diagonal steps
+  cost `sqrt(2) * base_cost` as usual.
 - **Heuristic**: Chebyshev or octile distance to the goal (admissible for
   8-directional uniform-cost grids).
 - **Multi-network paths**: a merchant may need to traverse Trail then Road
@@ -201,9 +211,23 @@ goal) request:
 - Cache/reuse paths: if a merchant's destination market hasn't changed and
   the connectivity grid hasn't changed since the last computation, don't
   recompute. Invalidate cached paths for all merchants when a pathway
-  segment is built/removed near their route (a coarse "any connectivity
-  change invalidates all paths" is acceptable for the spike; refine to
-  bounding-box checks only if profiling shows it matters).
+  segment is built/removed anywhere on the map.
+
+  **OPEN RE GAP**
+  ([`implementation/spec-deviations.md`](../implementation/spec-deviations.md)
+  item 11): this "any connectivity change invalidates all paths" rule is a
+  clone-side implementation detail with no original counterpart investigated
+  — whether the original re-routes every merchant on the map when *any*
+  player builds a pathway segment anywhere (producing a visible
+  all-merchants-re-path "hitch"), or only merchants whose route passes near
+  the change, is **not known**. This isn't framed as "acceptable for the
+  spike, refine if profiling shows it matters" — it's an open question about
+  whether the clone's behavior is even *correct* relative to the original's
+  player-visible feel, independent of performance. If profiling or
+  playtesting suggests a visible difference, narrowing to bounding-box
+  invalidation is the candidate fix, but confirming the original's actual
+  behavior (if recoverable) should come first. See
+  `documentation/00-roadmap.md`'s spec-fidelity workstream.
 - Path-following: each tick, move a merchant `speed * dt` (tile-space)
   toward `path[path_index]`; on arrival within epsilon, advance
   `path_index`. On reaching the final waypoint, the merchant's current

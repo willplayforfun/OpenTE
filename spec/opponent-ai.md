@@ -1,13 +1,36 @@
 # Opponent AI
 
 This document specifies the AI for non-human players: merchant trade-route
-behavior and strategic (building/research) decisions. **The original's
-`Player::Update` (`0x4a42f0`) was never disassembled** — RE work stopped
-after locating it via the entity-update dispatch table
-(`documentation/03-exe-analysis.md` Round 8). This entire document is
-therefore a **clean design**, informed only by the *data* the original
-exposes that an AI would plausibly act on (commodity prices/demand tiers,
-production recipes, tech costs) — not by any decoded original algorithm.
+behavior and strategic (building/research) decisions.
+
+**OPEN RE GAP** (`implementation/spec-deviations.md` item 13): Round 30
+(`documentation/03-exe-analysis.md`) partially disassembled `Player::Update`
+(`0x4a42f0`, 523B) and its generic per-unit counterpart `Character::Update`
+(`0x40c190`, 380B) — this is **further along than "never disassembled"**, but
+still far from a portable algorithm:
+
+- **Decoded**: the merchant arrival/order-completion state machine
+  (`Character::Update` steps 4-6 — did the merchant arrive at its order's
+  pickup/delivery market? complete-and-pop the order, or replan); a
+  1000-tick (`data.game.mnor`, confirmed) periodic scan that posts a "Merchant
+  is not assigned to any route" UI nag for AI players' idle merchants
+  (`fcn.4a4500`); and a once-near-game-start (999999-tick default) periodic
+  upkeep-cost payment over a character's abilities list.
+- **Located but undecoded**: `Player::Update`'s `+0xb0` block is an
+  "economic score (from `fcn.4a55b0`, a rolling average of up to 10 entries
+  from a per-player `+0x54` list) vs. a `99999.0` threshold -> branch to
+  `fcn.4a5ad0` or `fcn.4a56f0`, then always `fcn.4a7170` and `fcn.4a72d0`"
+  dispatcher — the strongest candidate for "what to build/research/trade
+  next" AI strategy logic, but none of those four functions (nor
+  `fcn.40d580` replan, nor the three `+0x7c`/`+0x88`/`+0x94` "advisor"
+  objects fed to `fcn.4a4790`) have been decoded.
+
+Until those functions are decoded, **there is no original strategy algorithm
+to port** — but unlike the old framing, this is a *specific, bounded* gap
+(five named functions plus the `+0x54`/`+0x12c`/`+0x7c`/`+0x88`/`+0x94`
+fields' producers/consumers), not "the whole subsystem is unknown." See "AI
+modes" below for how this gap is handled in the clone's design, and "Open
+questions / RE gaps" for the tracked investigation items.
 
 ## Scope for the spike vs. later
 
@@ -101,24 +124,68 @@ e.g. every N simulated days):
 
 ## Difficulty levels
 
-Implement as **multipliers on the above**, not separate code paths:
+Implement as **multipliers on the above**, not separate code paths (this
+applies to `modern` mode; `classic` mode's difficulty knobs, once portable,
+are whatever the original exposed — likely the same `data.game.mnor`-style
+tunables found in Round 30):
 - Treasury starting bonus.
 - Periodic-decision cadence (faster decisions = harder).
 - Minimum-margin threshold for trades (lower = more aggressive trading).
 - Building-priority scoring weight randomization (adds variety between AI
   players at the same difficulty).
 
+## AI modes: Classic (faithful port) vs. Modern (reinterpretation)
+
+Per the project's RE-fidelity goals, the original's AI is **not** something
+to approximate-and-move-on from — it should eventually be fully reverse
+engineered and faithfully ported. At the same time, the user has explicitly
+asked for a **modern reinterpretation as a first-class, independently
+valuable option**, not merely a stopgap for the missing original algorithm.
+The clone therefore exposes a per-AI-player **`ai_mode`** setting (selectable
+at game setup; a match can mix modes across AI players):
+
+- **`ai_mode: classic`** — runs the original's strategic-AI dispatcher as
+  decoded from `Player::Update`'s `+0xb0` block (see the gap analysis above):
+  the `fcn.4a55b0` economic-score-vs-`99999.0` check, the `fcn.4a5ad0`/
+  `fcn.4a56f0` strategy branch, and the always-run `fcn.4a7170`/`fcn.4a72d0`
+  evaluation steps, plus the `+0xb4`/1000-tick idle-merchant nag and the
+  `Character::Update` arrival/order-completion state machine (already
+  decoded and usable now). **Until `fcn.4a5ad0`/`4a56f0`/`4a7170`/`4a72d0`/
+  `40d580`/`4a4790` and the `+0x54`/`+0x12c`/`+0x7c`/`+0x88`/`+0x94`
+  fields are decoded, `classic` has no strategy logic to run** — it falls
+  back to `modern` and the UI should say so (e.g. "Classic AI is still being
+  researched; using Modern AI for this player"), rather than silently
+  presenting a "classic" experience that's secretly the modern one.
+- **`ai_mode: modern`** — the clean-room trade-route/strategic design in the
+  "Merchant trade-route AI" and "Strategic AI" sections above. This is kept
+  and developed as a **permanent alternative**, not retired once `classic`
+  becomes portable — the goal is two genuinely different, selectable AI
+  experiences.
+
+Both modes operate through the same world/economy state, the same
+`check_placement` ([input.md](input.md)) and order-queue infrastructure
+([entities.md](entities.md)), and the same difficulty multipliers where
+applicable — `ai_mode` only changes *which decision logic* picks moves, not
+the rules those moves must obey or the state they act on.
+
 ## Open questions / RE gaps
 
-- **Everything in this document is a clean design** — `Player::Update`
-  (`0x4a42f0`) was never decoded, so there is no original algorithm to
-  cross-check against. If `Player::Update` is decoded in a future RE
-  session, treat it as a *reference for tuning feel*, not a spec to match
-  exactly — the clone's AI architecture (data-oriented entity updates, see
-  [entities.md](entities.md)) is intentionally different from whatever
-  virtual-dispatch design the original used.
+- **OPEN — `Player::Update` strategy dispatcher** (spec-deviations item 13):
+  Round 30 (`documentation/03-exe-analysis.md`) located the `+0xb0` block's
+  "economic score vs. 99999.0 -> `fcn.4a5ad0`/`fcn.4a56f0`, then always
+  `fcn.4a7170`+`fcn.4a72d0`" dispatcher — the prime suspect for "what to
+  build/research/trade next" — but none of those four functions, nor
+  `fcn.40d580` (order replan), nor the three `+0x7c`/`+0x88`/`+0x94`
+  "advisor" objects passed to `fcn.4a4790`, nor the `+0x54`-list/`+0x12c`
+  fields `fcn.4a55b0`'s score is computed from, have been decoded. This is
+  the blocker for a faithful `classic` `ai_mode` (see "AI modes" above). See
+  `documentation/00-roadmap.md`'s spec-fidelity workstream for the tracked
+  investigation item.
 - **`char.orde`/`invo` decoding** ([world-and-maps.md](world-and-maps.md)/
   [entities.md](entities.md) Open questions) could, if completed, reveal the
   original's actual order-queue structure and provide a stronger reference
-  for Stage 2's design — currently `TradeOrder` is a clean-room
-  approximation of "what such a queue would need to contain".
+  for Stage 2's `modern`-mode design — currently `TradeOrder` is a
+  clean-room approximation of "what such a queue would need to contain".
+  This is independent of the `classic`/`modern` split above (both modes use
+  the same `TradeOrder` representation; only the decision logic that fills it
+  differs).

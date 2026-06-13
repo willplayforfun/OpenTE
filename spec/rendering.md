@@ -57,6 +57,113 @@ struct Camera {
 - The camera is **not** part of `World`/`Region` — it's per-viewport UI
   state, owned by the render/input layer.
 
+## Terrain rendering
+
+The terrain is rendered as a **per-vertex height-displaced mesh**, matching
+the original's `D3DTLVERTEX`-based tile rasterizer
+(`documentation/08-investigation-needed.md` B15, Rounds 25-37 — fully
+closed):
+
+- **Vertex grid**: for a `width x height` tile region, there is a
+  `(width+1) x (height+1)` grid of vertices, one per tile-grid corner. Each
+  vertex is shared by up to 4 adjacent tiles, so adjacent tiles' edges always
+  coincide exactly — no seams, no separate skirt/edge geometry.
+- **Vertex height**: a vertex's height is the average of the
+  `mapp.alti` heightmap bytes of its up-to-4 surrounding tiles (tiles off the
+  map edge, and water tiles, contribute `Region::sea_level()` instead of
+  their `alti` byte — this makes water render as a flat plane and the map
+  edge slope smoothly down to sea level).
+- **Height -> world pixels**: a vertex's raw `alti` byte (0-255) is converted
+  to a vertical world-pixel offset via `render::kPixelsPerAltiUnit` (`~1.7676
+  px/unit`, EXE-confirmed in `render/iso.h`) and **subtracted** from the
+  vertex's projected screen Y, so higher ground displaces upward. This
+  constant is defined in zoom-independent "world pixel space"; `Camera::
+  world_to_screen`'s uniform `(world - offset) * zoom` then applies zoom
+  correctly without any special-casing.
+- **Per-tile quad**: each tile is drawn as a single textured quad (two
+  triangles) whose 4 corners are the shared vertices described above, drawn
+  via `SDL_RenderGeometry` (requires SDL >= 2.0.18; available in this
+  project's vcpkg-pinned SDL2 2.32).
+- **Per-vertex slope shading**: each vertex gets an `SDL_Color` tint computed
+  from a central-difference normal (using its 4 neighboring vertices'
+  heights) dotted with a fixed light direction, blended between an ambient
+  floor and full brightness (see `kSlopeNormalZ`/`kLightDir`/`kAmbient` in
+  `render/iso.h`). This tint is set on `SDL_Vertex::color` and multiplies the
+  tile texture, approximating the original's per-vertex diffuse lighting.
+  The original's exact light direction/ambient constants weren't recovered
+  (B15 "still open" item 2); the clone's values are reasonable stand-ins and
+  can be tuned freely.
+- **UV mapping**: each tile's quad maps its own texture, a square with the
+  tile's diamond inscribed touching the texture's **edge midpoints** (the
+  same convention the old rect-blit relied on). The quad's 4 tile-grid-corner
+  vertices (the diamond's tips) map to those edge midpoints: NW=(0.5,0),
+  NE=(1,0.5), SE=(0.5,1), SW=(0,0.5) — the texture's own corners (its
+  diamond's transparent margins) are unused. The texture sampled for a given
+  tile is its **texture page** (see [world-and-maps.md](world-and-maps.md)'s
+  `texture_index` field and `tables/terrain_textures.json`'s 13-entry `pages`
+  array), looked up via `Region::texture_index_at(tx, ty)` — this replaces
+  the earlier "one texture per `TerrainType`" simplification with the
+  original's 13-slot per-tile texture-page selection (Stage A). The
+  original's continuous `uv = (col/8, row/16)` shared-atlas addressing
+  (Stage A.0) was tried and reverted — our extracted texture pages are single
+  64x32 per-tile images, not a large shared atlas, so map-spanning UVs just
+  sample tiny, heavily-magnified slivers of each page (see Stage A.0's
+  updated notes in `terrain-blending-plan.md`).
+- **No skirt/edge-cliff pass**: the original's `alti >= 13` mask is
+  walkability-only and has no renderer-geometry consumer (B15 Round 33).
+  Steep height differences between adjacent tiles simply produce steep
+  quads in the displaced mesh — there is no separate "cliff face" sprite or
+  geometry to draw.
+- **Build-once caching**: the heightmap is immutable at runtime (no terrain
+  editing in Stage 1), so the vertex height/color grids are computed once at
+  load time (`App::build_terrain_mesh()`) and cached; only screen-space
+  projection (which depends on camera pan/zoom) is recomputed per frame.
+
+### Texture-edge blending and shore overlays
+
+The original's D3D rasterizer additionally multi-pass-blends neighboring
+tiles' textures at shared edges (an edge-feather pass, plus shore-mask
+overlays and decals — B15 Rounds 35-37). The clone implements the
+non-deferred parts of this per
+[`terrain-blending-plan.md`](../implementation/terrain-blending-plan.md)
+Stages A-C and E, as additional `SDL_RenderGeometry` passes drawn on top of
+each tile's base quad (same corner vertices/positions/colors, only `tex_coord`
+and `color.a` differ per pass):
+
+- **Edge blending (Stage B, "B.4 fallback")**: for each of the tile's N/E/S/W
+  neighbors, if the neighbor is in the same water/land class but uses a
+  different texture page, a second quad is drawn sampling the *neighbor's*
+  page with a per-vertex alpha gradient (255 on the shared edge, 0 on the
+  opposite edge) — fading the neighbor's texture in towards that edge.
+  `terr/edge` was inspected and found to be a plain gradient (not a baked
+  feather-cell atlas, B.1), so this per-vertex alpha gradient is used instead
+  of an edge-atlas texture. Map-edge tiles (no neighbor) and cross-class
+  (water/land) edges are skipped — the latter is handled by shore overlays.
+- **Shore overlays (Stage C)**: at water/land boundaries, up to two
+  additional quads are drawn from the `terrain.coa0`/`terrain.coa1` atlases:
+  an 8-direction water-neighbor mask selects an "overlay1" cell via a 256-entry
+  lookup table, and a 4-corner water-flags value selects an "overlay2" cell
+  (shoreline corner piece) via an 85-entry lookup table + shape map. Both
+  tables and the 53-cell UV-index array are EXE-derived
+  (`documentation/extracted/exe_b15_round37_shore_tables.txt`,
+  `exe_b15_round37_shore_tables.txt`'s "UV-index array @ 0x5f8940"). The
+  square-cell-to-diamond-quad UV mapping (`kShoreCellSize` = 2/16 of the
+  atlas) is a documented approximation pending visual validation.
+- **Master toggle (Stage E)**: `App::terrain_textures_enabled_` (mirroring
+  the original's `TMapView+0x249` "Terrain textures" option) — when false,
+  every tile is drawn as a flat slope-shaded quad with no texture and no
+  blending/overlay passes. `terrain_blending_enabled_`/
+  `shore_overlays_enabled_` (`+0x24a`/`+0x24b`) independently gate the B/C
+  passes. None of the three are exposed in UI yet (code-level only).
+- **Decals**: not implemented — out of scope for this plan (see
+  `terrain-blending-plan.md` Stage D, deferred indefinitely pending Stage 3
+  pathway rendering).
+
+A detailed, staged implementation plan — including the per-tile
+texture-page data model, palette/atlas extraction, and open
+validation items for the shore-overlay UV mapping — lives in
+[`OpenTE/implementation/terrain-blending-plan.md`](../implementation/terrain-blending-plan.md).
+
 ## Sprite assets
 
 The extractor produces one RGBA8888 PNG per original sprite (see
@@ -206,3 +313,19 @@ world/camera-projected mode used for tiles/entities.
   full-color RGBA as-is. If per-player recoloring is wanted for visual
   clarity (e.g. recoloring banners/flags only), that's a clone design choice
   using `SDL_SetTextureColorMod`, not an RE-blocked item.
+- ~~**3D terrain heightmap rendering**~~ **Resolved** — B15 (Rounds 25-37) is
+  fully closed: per-vertex height displacement (`~45.25*zoom` px/world-unit),
+  8-neighbor slope-based diffuse shading, and no skirt/edge-cliff pass. See
+  "Terrain rendering" above for the implemented clone model, including the
+  per-tile texture-page selection and the edge-blend/shore-overlay passes
+  (`terrain-blending-plan.md` Stages A-C/E). The original's
+  `uv = (col/8, row/16)` continuous shared-atlas texture mapping (Stage A.0)
+  was tried and reverted in favor of per-tile edge-midpoint UVs — see
+  "Terrain rendering"'s UV mapping bullet. The exact light/ambient constants
+  for slope shading (item 2 below) are still open, and the shore-overlay UV
+  mapping is a documented approximation pending visual validation.
+- **Exact slope-shading light direction/ambient constants**: B15 confirmed
+  *that* the original computes per-vertex normals and a diffuse term, but
+  not the exact light direction or ambient floor values. `render/iso.h`'s
+  `kLightDir`/`kAmbient`/`kSlopeNormalZ` are reasonable stand-ins; revisit if
+  further EXE analysis recovers the originals.

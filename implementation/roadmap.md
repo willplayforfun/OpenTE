@@ -26,6 +26,22 @@ to `documentation/00-roadmap.md` for the RE side).
   building it against a still-changing single-player target would mean
   redoing that work repeatedly.
 
+## CI / build pipeline notes
+
+- `.github/workflows/{ci,release}.yml` build the Windows target with the
+  `Visual Studio 17 2022` CMake generator on `windows-2022` runners. This is
+  pinned (not `windows-latest`) because GitHub's `windows-latest` image has
+  rolled forward to a version where CMake's VS-generator detection fails
+  ("could not find any instance of Visual Studio"). Revisit the pin if/when
+  GitHub's newer Windows images reliably support this generator again.
+- **Future idea**: it would be nice to have a non-Microsoft build pipeline
+  option (e.g. MinGW-w64 + Ninja, via `msys2/setup-msys2` or cross-compiling
+  from `ubuntu-latest`) so the Windows build doesn't depend on MSVC/Visual
+  Studio at all. Tradeoff: vcpkg's `x64-mingw-*` triplets generally lack a
+  prebuilt binary cache, so SDL2/SDL2_image/nlohmann-json would build from
+  source on cache misses, increasing CI time. Not pursued yet — current
+  pin to `windows-2022` is sufficient for now.
+
 ## Guiding principle: vertical slices
 
 Each stage should produce a **playable (if minimal) end-to-end loop**, not a
@@ -70,9 +86,10 @@ buildings rendered isometrically, pan/zoom around it.
 **Goal**: place buildings on the map with full legality checking.
 
 - Implement [input.md](../spec/input.md)'s placement-legality checks
-  (`PlacementError` enum) against Stage 1's static world — terrain check can
-  initially be a stub (`return Ok` for any non-water tile) since
-  `fcn.4640c0`'s internals weren't decoded; tighten later.
+  (`PlacementError` enum) against Stage 1's static world. A stub (`return Ok`
+  for any non-water tile) is fine for a first pass; tighten using the
+  terrain-buildability and connectivity rules in
+  [input.md](../spec/input.md) when revisiting.
 - Implement the placement-preview highlight overlay
   ([rendering.md](../spec/rendering.md)).
 - Implement a minimal build menu ([ui.md](../spec/ui.md)) listing all
@@ -177,7 +194,7 @@ delete them — git history retains the record).
 | Placeholder | Introduced in | Real implementation tracked by |
 |---|---|---|
 | Terrain band -> terrain-type mapping is coarse/approximate | Stage 1 | [world-and-maps.md](../spec/world-and-maps.md) Open questions |
-| `fcn.4640c0` terrain-buildability check stubbed to "non-water" | Stage 2 | [input.md](../spec/input.md) Open questions |
+| Terrain-buildability check stubbed to "non-water" (real rule decoded, not yet wired in) | Stage 2 | [input.md](../spec/input.md) Open questions |
 | Flat placeholder building/pathway costs, no real treasury rules | Stage 2-3 | [simulation.md](../spec/simulation.md) |
 | Road/trail tiles use flat debug overlay, not real connection-sprite variants | Stage 3 | [rendering.md](../spec/rendering.md) |
 | Economy tuning constants (`PSCA` etc.) are first-guess values | Stage 4 | `tuning-log.md` (create when Stage 4 starts) |
@@ -185,7 +202,7 @@ delete them — git history retains the record).
 | Starting buildings/resources/merchants for a region: extract real `enti` table from a matching save (`scripts/te_save.py`) where available; otherwise scatter `bres` per `epis.<ep>.regi.<id>.grou` quotas on non-water tiles | Stage 1 | `documentation/09-episode-population.md` (workstream H, in progress) |
 | UI is flat-color placeholders; UI sprites (`a_ui`/`d_ui`/`m_ui`) are extracted but not wired into widgets | All UI stages | [ui.md](../spec/ui.md) Open questions (T0.4, extraction done, wiring pending) |
 | Single-region only | Stages 1-7 | Stage 8 |
-| Terrain is rendered flat (no per-tile elevation); edge skirts (`terrain.edge`) only drawn along the map's south/east border, not at internal height-difference edges | Stage 1 | `documentation/08-investigation-needed.md` B15 |
+| Shore-overlay UV mapping (`kShoreUvIndex` cell -> diamond-quad UV rect) is a documented square-to-diamond approximation pending visual validation against the original; "decal" pass (Stage D) deferred indefinitely pending Stage 3 pathway rendering | Stage 1 (terrain-blending-plan.md Stages A-C/E done) | [rendering.md](../spec/rendering.md#texture-edge-blending-and-shore-overlays), [terrain-blending-plan.md](terrain-blending-plan.md) |
 
 **Note (2026-06-11, see `documentation/08-investigation-needed.md` Tier 0):**
 Stage 1's map extraction and Stage 4's economy/production placeholders can
