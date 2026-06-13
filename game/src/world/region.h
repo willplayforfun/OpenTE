@@ -40,6 +40,27 @@ public:
     /// `[0, width)` / `[0, height)`.
     TerrainType terrain_at(int tx, int ty) const { return terrain_[static_cast<std::size_t>(ty) * width_ + tx]; }
 
+    /// Returns the raw `mapp.alti` byte at tile `(tx, ty)` (`tx`/`ty` must be
+    /// in `[0, width)` / `[0, height)`). Convert to world height units via
+    /// `alti_byte * 10.0 / 256.0` (see `documentation/08-investigation-needed.md`
+    /// B15) -- the renderer instead uses `render::kPixelsPerAltiUnit` to go
+    /// straight from this byte to a screen-pixel offset.
+    std::uint8_t height_at(int tx, int ty) const { return heightmap_[static_cast<std::size_t>(ty) * width_ + tx]; }
+
+    /// The map's "sea level" `alti` value, used as the fixed height for water
+    /// tiles -- per B15, this is best derived per-map as the heightmap's own
+    /// minimum rather than from a `terrain_at` band.
+    std::uint8_t sea_level() const { return sea_level_; }
+
+    /// Returns the texture-page index (1-13) at tile `(tx, ty)`, indexing
+    /// into `tables/terrain_textures.json` (terrain-blending-plan.md Stage
+    /// A.1, from `mapp.terr & 0xf`). `tx`/`ty` must be in `[0, width)` /
+    /// `[0, height)`. Maps with no `texture_index` field default to 1
+    /// everywhere.
+    std::uint8_t texture_index_at(int tx, int ty) const {
+        return texture_index_[static_cast<std::size_t>(ty) * width_ + tx];
+    }
+
     const std::vector<MapRegion>& regions() const { return regions_; }
     const std::vector<Decoration>& decorations() const { return decorations_; }
     const std::vector<City>& cities() const { return cities_; }
@@ -52,6 +73,9 @@ private:
     int width_ = 0;
     int height_ = 0;
     std::vector<TerrainType> terrain_;  // row-major, width_ * height_
+    std::vector<std::uint8_t> heightmap_;  // row-major, width_ * height_ (raw `mapp.alti` bytes)
+    std::vector<std::uint8_t> texture_index_;  // row-major, width_ * height_, values 1-13
+    std::uint8_t sea_level_ = 0;
     std::vector<MapRegion> regions_;
     std::vector<Decoration> decorations_;
     std::vector<City> cities_;

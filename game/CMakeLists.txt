@@ -25,6 +25,7 @@ add_executable(opente
     src/core/app.cpp
     src/core/paths.cpp
     src/data/registry.cpp
+    src/render/terrain_renderer.cpp
     src/render/texture.cpp
     src/world/region.cpp
     src/world/world.cpp

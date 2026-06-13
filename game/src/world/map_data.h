@@ -97,6 +97,31 @@ inline void from_json(const nlohmann::json& j, TerrainData& t) {
     t.data = j.value("data", "");
 }
 
+struct HeightmapData {
+    std::string encoding;
+    std::string data;  // base64, encoding-dependent (see region.h)
+};
+
+inline void from_json(const nlohmann::json& j, HeightmapData& h) {
+    h.encoding = j.value("encoding", "");
+    h.data = j.value("data", "");
+}
+
+/// Per-tile texture-page index grid (B15 Round 35/36, terrain-blending-plan.md
+/// Stage A.1): same "base64-rle" convention as `TerrainData`, values 1-13
+/// indexing into `tables/terrain_textures.json`. Optional -- older extracted
+/// maps without this field fall back to texture-page 1 everywhere
+/// (see region.cpp).
+struct TextureIndexData {
+    std::string encoding;
+    std::string data;
+};
+
+inline void from_json(const nlohmann::json& j, TextureIndexData& t) {
+    t.encoding = j.value("encoding", "");
+    t.data = j.value("data", "");
+}
+
 /// Mirrors the full `maps/<id>.json` document.
 struct MapFile {
     std::string id;
@@ -105,6 +130,8 @@ struct MapFile {
     int width = 0;
     int height = 0;
     TerrainData terrain;
+    HeightmapData heightmap;
+    TextureIndexData texture_index;
     std::vector<MapRegion> regions;
     std::vector<Decoration> decorations;
     std::vector<City> cities;
@@ -118,6 +145,12 @@ inline void from_json(const nlohmann::json& j, MapFile& m) {
     m.width = j.value("width", 0);
     m.height = j.value("height", 0);
     j.at("terrain").get_to(m.terrain);
+    if (j.contains("heightmap")) {
+        j.at("heightmap").get_to(m.heightmap);
+    }
+    if (j.contains("texture_index")) {
+        j.at("texture_index").get_to(m.texture_index);
+    }
     m.regions = j.value("regions", std::vector<MapRegion>{});
     m.decorations = j.value("decorations", std::vector<Decoration>{});
     m.cities = j.value("cities", std::vector<City>{});

@@ -2,10 +2,8 @@
 
 #include <SDL_image.h>
 
-#include <algorithm>
-#include <array>
-#include <cstddef>
 #include <iostream>
+#include <utility>
 
 #include "core/paths.h"
 #include "render/iso.h"
@@ -15,7 +13,7 @@ namespace opente::core {
 namespace {
 constexpr int kWindowWidth = 1280;
 constexpr int kWindowHeight = 720;
-constexpr const char* kWindowTitle = "OpenTE (Stage 1: walk the map)";
+constexpr const char* kWindowTitle = "OpenTE";
 
 // World-pixels-per-second pan speed at zoom 1.0.
 constexpr float kPanSpeed = 600.0f;
@@ -25,21 +23,6 @@ constexpr float kZoomStep = 0.1f;
 
 constexpr const char* kStartMapId = "ep01_china";
 constexpr const char* kHqSpriteId = "bldg.chi1.head";
-
-/// `game_data` sprite ids for the per-`world::TerrainType` tile textures
-/// (see `tools/extractor/sprites/terrain.py`), indexed by the enum's
-/// underlying value.
-constexpr std::array<const char*, 7> kTerrainTextureIds = {{
-    "terrain.deep_water",
-    "terrain.shallow_water",
-    "terrain.plains",
-    "terrain.hills",
-    "terrain.mountains",
-    "terrain.desert",
-    "terrain.forest",
-}};
-
-constexpr const char* kTerrainEdgeTextureId = "terrain.edge";
 
 /// Sprite ids for ground-decoration sprites (see
 /// `tools/extractor/sprites/decorations.py`) all share this prefix.
@@ -93,21 +76,12 @@ bool App::init(const std::filesystem::path& executable_path) {
     std::cout << "Loaded map '" << world_->region().name() << "' (" << world_->region().width() << "x"
               << world_->region().height() << ")" << std::endl;
 
+    terrain_renderer_.emplace(renderer_, world_->region());
+    terrain_renderer_->load_textures(*game_data_dir, *registry_);
+
     for (const data::SpriteEntry& sprite : registry_->manifest().sprites) {
         if (sprite.id == kHqSpriteId) {
             hq_sprite_ = render::Texture::load(renderer_, *game_data_dir / sprite.file);
-            continue;
-        }
-
-        if (sprite.id == kTerrainEdgeTextureId) {
-            terrain_edge_texture_ = render::Texture::load(renderer_, *game_data_dir / sprite.file);
-            continue;
-        }
-
-        const auto terrain_it = std::find(kTerrainTextureIds.begin(), kTerrainTextureIds.end(), sprite.id);
-        if (terrain_it != kTerrainTextureIds.end()) {
-            const auto index = static_cast<std::size_t>(terrain_it - kTerrainTextureIds.begin());
-            terrain_textures_[index] = render::Texture::load(renderer_, *game_data_dir / sprite.file);
             continue;
         }
 
@@ -218,69 +192,12 @@ void App::render() {
     SDL_RenderClear(renderer_);
 
     if (world_) {
-        render_terrain();
+        terrain_renderer_->render(camera_);
         render_decorations();
         render_buildings();
     }
 
     SDL_RenderPresent(renderer_);
-}
-
-void App::render_terrain() {
-    const world::Region& region = world_->region();
-
-    const float tile_w = render::kTileWidth * camera_.zoom;
-    const float tile_h = render::kTileHeight * camera_.zoom;
-
-    for (int ty = 0; ty < region.height(); ++ty) {
-        for (int tx = 0; tx < region.width(); ++tx) {
-            const auto index = static_cast<std::size_t>(region.terrain_at(tx, ty));
-            const render::Texture& texture = terrain_textures_[index];
-            if (!texture.valid()) {
-                continue;
-            }
-
-            // Tile (tx, ty)'s diamond spans from its "north" corner (the
-            // top point, per render/iso.h) down kTileHeight and from
-            // kTileWidth/2 left of it to kTileWidth/2 right of it.
-            const render::Vec2 north = render::tile_to_world(static_cast<float>(tx), static_cast<float>(ty));
-            const render::Vec2 top_left =
-                camera_.world_to_screen({north.x - render::kTileWidth / 2.0f, north.y});
-
-            const SDL_FRect dest{top_left.x, top_left.y, tile_w, tile_h};
-            SDL_RenderCopyF(renderer_, texture.handle(), nullptr, &dest);
-        }
-    }
-
-    render_terrain_edges();
-}
-
-void App::render_terrain_edges() {
-    if (!terrain_edge_texture_.valid()) {
-        return;
-    }
-
-    const world::Region& region = world_->region();
-    const float tile_w = render::kTileWidth * camera_.zoom;
-    const float tile_h = render::kTileHeight * camera_.zoom;
-
-    // Draw a row of "skirt" tiles directly below the map's south and east
-    // border tiles, using the vertical rock/cliff texture (terrain.edge),
-    // approximating the original game's map-edge rendering.
-    auto draw_skirt = [&](int tx, int ty) {
-        const render::Vec2 north = render::tile_to_world(static_cast<float>(tx), static_cast<float>(ty));
-        const render::Vec2 top_left =
-            camera_.world_to_screen({north.x - render::kTileWidth / 2.0f, north.y + render::kTileHeight});
-        const SDL_FRect dest{top_left.x, top_left.y, tile_w, tile_h};
-        SDL_RenderCopyF(renderer_, terrain_edge_texture_.handle(), nullptr, &dest);
-    };
-
-    for (int tx = 0; tx < region.width(); ++tx) {
-        draw_skirt(tx, region.height() - 1);
-    }
-    for (int ty = 0; ty < region.height(); ++ty) {
-        draw_skirt(region.width() - 1, ty);
-    }
 }
 
 void App::render_decorations() {
@@ -291,8 +208,9 @@ void App::render_decorations() {
         }
         const AnchoredSprite& sprite = it->second;
 
-        const render::Vec2 world_pos =
+        render::Vec2 world_pos =
             render::tile_to_world(static_cast<float>(decoration.x), static_cast<float>(decoration.y));
+        world_pos.y -= terrain_renderer_->sample_height(decoration.x, decoration.y) * render::kPixelsPerAltiUnit;
         const render::Vec2 screen_pos = camera_.world_to_screen(world_pos);
 
         const float w = sprite.texture.width() * camera_.zoom;
@@ -310,7 +228,8 @@ void App::render_buildings() {
 
     for (const world::MapRegion& map_region : world_->region().regions()) {
         const world::Headquarters& hq = map_region.headquarters;
-        const render::Vec2 world_pos = render::tile_to_world(static_cast<float>(hq.x), static_cast<float>(hq.y));
+        render::Vec2 world_pos = render::tile_to_world(static_cast<float>(hq.x), static_cast<float>(hq.y));
+        world_pos.y -= terrain_renderer_->sample_height(hq.x, hq.y) * render::kPixelsPerAltiUnit;
         const render::Vec2 screen_pos = camera_.world_to_screen(world_pos);
 
         // Placeholder anchor: bottom-center of the sprite sits on the tile

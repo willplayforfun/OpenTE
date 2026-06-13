@@ -2,7 +2,6 @@
 
 #include <SDL.h>
 
-#include <array>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -10,6 +9,7 @@
 
 #include "data/registry.h"
 #include "render/camera.h"
+#include "render/terrain_renderer.h"
 #include "render/texture.h"
 #include "world/world.h"
 
@@ -38,8 +38,6 @@ private:
     void update(float dt_seconds);
     void render();
 
-    void render_terrain();
-    void render_terrain_edges();
     void render_decorations();
     void render_buildings();
 
@@ -57,13 +55,9 @@ private:
 
     std::optional<data::DataRegistry> registry_;
     std::optional<world::World> world_;
+    std::optional<render::TerrainRenderer> terrain_renderer_;
     render::Camera camera_;
     render::Texture hq_sprite_;
-
-    /// Per-`world::TerrainType` tile textures, indexed by the enum's
-    /// underlying value (see `core/app.cpp`'s `kTerrainTextureIds`).
-    std::array<render::Texture, 7> terrain_textures_;
-    render::Texture terrain_edge_texture_;
 
     /// Ground-decoration sprites, keyed by `data::SpriteEntry::id`
     /// (e.g. "flor.chin.3").

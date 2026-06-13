@@ -15,6 +15,11 @@ Two things this module decodes that aren't pinned down by the spec yet:
   specified byte-for-byte by `world-and-maps.md`, so this module defines it
   as a flat sequence of `(type_byte: uint8, run_length: uint16 LE)` pairs
   covering the row-major `width*height` grid, base64-encoded.
+- **`heightmap.data` "raw-base64" encoding**: the original `mapp.alti`
+  byte grid (row-major, one byte per tile, `0..255`), base64-encoded
+  verbatim with no transformation -- see
+  `documentation/08-investigation-needed.md` B15 for the heightfield
+  validation and the `alti_byte * 10.0 / 256.0` world-height formula.
 """
 from __future__ import annotations
 
@@ -137,6 +142,17 @@ def extract_map(
     raw_terrain = map_data[terr_off:terr_off + terr_field.size]
     terrain_types = bytes(_terrain_type_for_band(v) for v in raw_terrain)
 
+    # Per-tile texture-page index (B15 Round 35/36, terrain-blending-plan.md
+    # Stage A.1): low nibble of `mapp.terr`, 1-13 indexes
+    # `tables/terrain_textures.json`. Clamp out-of-range values to 1 (the
+    # round's notes say 0/>13 shouldn't occur but this hasn't been
+    # exhaustively verified across all maps).
+    texture_indices = bytes((v & 0xF) if 1 <= (v & 0xF) <= 13 else 1 for v in raw_terrain)
+
+    alti_field = mapp_fields["alti"]
+    alti_off = mapp_entry.dir.offset + alti_field.raw_rel
+    raw_alti = map_data[alti_off:alti_off + alti_field.size]
+
     elem_entry = find_child(map_root, "elem")
     if elem_entry is None or elem_entry.dir is None:
         raise ValueError("'elem' not found in map file")
@@ -214,6 +230,14 @@ def extract_map(
         "terrain": {
             "encoding": "base64-rle",
             "data": _encode_terrain_rle(terrain_types),
+        },
+        "heightmap": {
+            "encoding": "raw-base64",
+            "data": base64.b64encode(raw_alti).decode("ascii"),
+        },
+        "texture_index": {
+            "encoding": "base64-rle",
+            "data": _encode_terrain_rle(texture_indices),
         },
         "regions": regions,
         "decorations": decorations,

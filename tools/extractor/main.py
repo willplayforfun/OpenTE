@@ -188,6 +188,7 @@ def run(game_dir: GameDirectory, output_dir: Path) -> None:
     m_ui_data, m_ui_footer = load(game_dir.data_dir / "m_ui,u.{}")
     m_ui_root = parse_tree(m_ui_data, m_ui_footer)
     sprite_entries += extract_terrain_textures(m_ui_data, m_ui_root, output_dir)
+    table_entries.append(TableEntry(id="terrain_textures", file="tables/terrain_textures.json"))
 
     flor_data, flor_footer = load(game_dir.data_dir / "flor.{}")
     flor_root = parse_tree(flor_data, flor_footer)

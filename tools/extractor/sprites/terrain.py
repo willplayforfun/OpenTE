@@ -1,20 +1,56 @@
-"""Extracts terrain tile and map-edge textures from `m_ui,u.{}` (B7).
+"""Extracts terrain texture-page, shore-overlay, and map-edge textures from
+`m_ui,u.{}` (B7/B15), plus the `terrain_textures.json` palette table.
 
 `m_ui,u.{}`'s `terr/` directory has 93 leaves, each a 256x256 RGBA8888
-`bg6a` sprite (e.g. `terr/deep`, `terr/ts11`, `terr/edge`). Per
-`documentation/08-investigation-needed.md` B7, the per-tile lookup table the
-original game uses to pick a texture for each `mapp.terr` byte value hasn't
-been decoded yet, so this picks one representative texture per clone
-`world::TerrainType` enum value (`_TERRAIN_TYPE_TEXTURES`) -- a coarse
-"textured but not authentic" placeholder, same spirit as
-`maps.region._terrain_type_for_band`.
+`bg6a` sprite (e.g. `terr/deep`, `terr/ts11`, `terr/edge`, `terr/coa0`).
 
-Each chosen texture is downsampled from 256x256 to a `kTileWidth` x
-`kTileHeight` (64x32) tile and, for the terrain types, masked to the
-isometric diamond shape (alpha=0 outside the diamond) so adjacent tiles
-don't overdraw each other's corners. The edge texture (`terr_edge`, a
-vertical rock/cliff face -- see B11/roadmap item 3) is downsampled to the
-same tile size but left as a full rectangle, for use as a border "skirt".
+Per `OpenTE/implementation/terrain-blending-plan.md` Stage A, the original
+picks a per-tile texture from a 13-slot "texture page" table built from one
+`terr/sets/<N>` palette record (`documentation/extracted/
+data_catalog_terr_sets.txt`, B15 Round 36). `_TEXTURE_PAGE_SOURCES` below is
+that 13-slot table resolved for palette `N=16` ("chi1" -- matches
+`ep01_china`'s culture set), per Stage A.3/A.4 as corrected by the full
+disassembly of `fcn.0x466790` (`documentation/extracted/
+exe_b15_round36_init.txt` lines 170-470):
+
+```
+index:  1     2     3     4     5     6     7     8     9     10    11    12    13
+field:  deep  seas  alps  bld0  bld1  bld2  hill  mntn  undr  soil  ?     dsr0  dsr1
+chi1:   deep  seas  snow  ts17  ts16  ts15  chhi  chmo  ts14  ts18  ?     sand  sand
+```
+
+Two corrections to the original Stage A.3 table:
+
+- **Index 1 is `deep`, not `hidd`.** `hidd` is written to a *scratch local*
+  at the top of `fcn.0x466790`, then passed to the per-field copy helper
+  alongside each `terr/sets/<N>` lookup -- it's a fallback substituted when a
+  field resolves to the `none` sentinel, not a table slot. `terr/hidd` is a
+  starfield; per the user (2026-06-12), it's a tiling texture drawn *behind*
+  the terrain (visible past the map edges), unrelated to the 13-slot
+  per-tile table. There is no "fog of war"/"unexplored" concept here.
+- **Index 11 has no source in `fcn.0x466790` at all** -- the 28-byte-stride
+  table write sequence goes `...soil (slot 10) -> [slot 11 skipped] -> dsr0
+  (slot 12) -> dsr1 (slot 13)`, with no write to the slot-11 offset
+  (`esi+0x134`). `tran` (chi1 -> `trch`) is a *separate* single-texture slot
+  (`esi+0x1b3c`, grouped with `coa0`/`coa1`/`edge`/per-culture decoration
+  refs), not index 11's source -- matches `trch`'s visual content (a 4x4
+  grid of distinct sparkle/particle frames, not a tileable ground texture;
+  likely a transport-route decoration atlas). **Index 11 is left unmapped
+  below** (empty sprite id, renderer falls back to flat shading for any tile
+  with `texture_index == 11`) -- TODO: dig further into whether/how slot 11
+  is ever actually selected by real `mapp.terr` data before assuming it's
+  truly dead.
+
+Each texture page is extracted at **full native resolution (256x256)**, no
+downsample, no diamond mask. Per B15 Round 34, the renderer's continuous
+`uv = (col/8, row/16)` scheme means each page tiles seamlessly across an
+8x16-tile region of the map (32x16px per tile, 2x-magnified onto the 64x32
+screen diamond) -- the texture must stay at its native tileable resolution
+for that math to land on a sensible sample size (a 64x32-downsampled page
+would only yield an 8x2px sample per tile, magnified 8x).
+
+`terr/coa0`/`terr/coa1` (Stage C.1, shore-overlay atlases) and `terr/edge`
+are extracted at full native resolution (256x256), unscaled/unmasked.
 """
 from __future__ import annotations
 
@@ -22,56 +58,45 @@ from pathlib import Path
 
 from ..containers.container import DirNode, find_child
 from ..manifest import SpriteEntry
+from ..tables.json_io import write_json
 from .sprite import decode_sprite, find_leaf, write_png_rgba
 
-_TILE_WIDTH = 64
-_TILE_HEIGHT = 32
-
-# (clone TerrainType name, `m_ui,u.{}` `terr/<tag>` leaf) -- order matches
-# `world::TerrainType` / `maps.region._TERRAIN_TYPES`.
-_TERRAIN_TYPE_TEXTURES = [
-    ("deep_water", "deep"),
-    ("shallow_water", "seas"),
-    ("plains", "ts11"),
-    ("hills", "dirt"),
-    ("mountains", "mntn"),
-    ("desert", "sand"),
-    ("forest", "ts20"),
-]
+# 13-slot texture-page table (index 1-13 -> `terr/<tag>`), resolved for the
+# "chi1" palette (`terr/sets/16`) -- see module docstring. Index 11 has no
+# confirmed source (see docstring) and is left unmapped.
+_TEXTURE_PAGE_SOURCES: dict[int, str] = {
+    1: "deep",
+    2: "seas",
+    3: "snow",
+    4: "ts17",
+    5: "ts16",
+    6: "ts15",
+    7: "chhi",
+    8: "chmo",
+    9: "ts14",
+    10: "ts18",
+    12: "sand",
+    13: "sand",
+}
 
 _EDGE_TEXTURE_TAG = "edge"
 _EDGE_SPRITE_ID = "terrain.edge"
 
+# Shore-overlay atlases (Stage C.1).
+_SHORE_ATLAS_TAGS = {
+    "coa0": "terrain.coa0",
+    "coa1": "terrain.coa1",
+}
 
-def _downsample(rgba: bytes, src_size: int, dst_w: int, dst_h: int) -> bytes:
-    """Nearest-neighbour downsample of a `src_size` x `src_size` RGBA8888
-    image to `dst_w` x `dst_h`."""
-    out = bytearray(dst_w * dst_h * 4)
-    for dy in range(dst_h):
-        sy = dy * src_size // dst_h
-        for dx in range(dst_w):
-            sx = dx * src_size // dst_w
-            si = (sy * src_size + sx) * 4
-            di = (dy * dst_w + dx) * 4
-            out[di:di + 4] = rgba[si:si + 4]
-    return bytes(out)
+_TERRAIN_TEXTURES_TABLE_PATH = Path("tables") / "terrain_textures.json"
 
 
-def _diamond_mask(rgba: bytes, w: int, h: int) -> bytes:
-    """Sets alpha=0 for every pixel outside the `w` x `h` isometric diamond."""
-    out = bytearray(rgba)
-    cx, cy = w / 2.0, h / 2.0
-    for y in range(h):
-        for x in range(w):
-            if abs((x + 0.5) - cx) / cx + abs((y + 0.5) - cy) / cy > 1.0:
-                out[(y * w + x) * 4 + 3] = 0
-    return bytes(out)
-
-
-def extract_terrain_textures(m_ui_data: bytes, m_ui_root: DirNode, output_dir: Path) -> list[SpriteEntry]:
-    """Returns `SpriteEntry` list for the per-`TerrainType` tile textures
-    plus the map-edge "skirt" texture, writing PNGs under
-    `<output_dir>/sprites/terrain/`."""
+def extract_terrain_textures(m_ui_data: bytes, m_ui_root: DirNode,
+                              output_dir: Path) -> list[SpriteEntry]:
+    """Returns `SpriteEntry` list for the 13 terrain texture pages, the
+    shore-overlay atlases, and the map-edge texture; writes their PNGs under
+    `<output_dir>/sprites/terrain/` and the resolved palette table to
+    `<output_dir>/tables/terrain_textures.json`."""
     terr_entry = find_child(m_ui_root, "terr")
     if terr_entry is None or terr_entry.dir is None:
         return []
@@ -81,30 +106,46 @@ def extract_terrain_textures(m_ui_data: bytes, m_ui_root: DirNode, output_dir: P
     sprites_dir.mkdir(parents=True, exist_ok=True)
 
     entries: list[SpriteEntry] = []
+    page_sprite_ids: list[str] = []
 
-    for type_name, tag in _TERRAIN_TYPE_TEXTURES:
+    for index in range(1, 14):
+        tag = _TEXTURE_PAGE_SOURCES.get(index)
+        leaf = find_leaf(terr_root, [tag]) if tag is not None else None
+        if leaf is None:
+            page_sprite_ids.append("")
+            continue
+        sprite = decode_sprite(m_ui_data, leaf.abs_off, leaf.size)
+        if sprite is None:
+            page_sprite_ids.append("")
+            continue
+        sprite_id = f"terrain.page{index:02d}"
+        relative_path = Path("sprites") / "terrain" / f"{sprite_id}.png"
+        write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, sprite.rgba)
+        entries.append(SpriteEntry(id=sprite_id, file=str(relative_path).replace("\\", "/"),
+                                     width=sprite.width, height=sprite.height))
+        page_sprite_ids.append(sprite_id)
+
+    for tag, sprite_id in _SHORE_ATLAS_TAGS.items():
         leaf = find_leaf(terr_root, [tag])
         if leaf is None:
             continue
         sprite = decode_sprite(m_ui_data, leaf.abs_off, leaf.size)
         if sprite is None:
             continue
-        tile = _diamond_mask(_downsample(sprite.rgba, sprite.width, _TILE_WIDTH, _TILE_HEIGHT),
-                              _TILE_WIDTH, _TILE_HEIGHT)
-        sprite_id = f"terrain.{type_name}"
         relative_path = Path("sprites") / "terrain" / f"{sprite_id}.png"
-        write_png_rgba(output_dir / relative_path, _TILE_WIDTH, _TILE_HEIGHT, tile)
+        write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, sprite.rgba)
         entries.append(SpriteEntry(id=sprite_id, file=str(relative_path).replace("\\", "/"),
-                                     width=_TILE_WIDTH, height=_TILE_HEIGHT))
+                                     width=sprite.width, height=sprite.height))
 
     edge_leaf = find_leaf(terr_root, [_EDGE_TEXTURE_TAG])
     if edge_leaf is not None:
         sprite = decode_sprite(m_ui_data, edge_leaf.abs_off, edge_leaf.size)
         if sprite is not None:
-            tile = _downsample(sprite.rgba, sprite.width, _TILE_WIDTH, _TILE_HEIGHT)
             relative_path = Path("sprites") / "terrain" / f"{_EDGE_SPRITE_ID}.png"
-            write_png_rgba(output_dir / relative_path, _TILE_WIDTH, _TILE_HEIGHT, tile)
+            write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, sprite.rgba)
             entries.append(SpriteEntry(id=_EDGE_SPRITE_ID, file=str(relative_path).replace("\\", "/"),
-                                         width=_TILE_WIDTH, height=_TILE_HEIGHT))
+                                         width=sprite.width, height=sprite.height))
+
+    write_json(output_dir / _TERRAIN_TEXTURES_TABLE_PATH, {"pages": page_sprite_ids})
 
     return entries
