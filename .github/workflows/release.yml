@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             preset: windows-x64
             build-preset: windows-x64-release
             artifact-name: opente-game-windows-x64
@@ -52,7 +52,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             artifact-name: opente-extract-windows-x64
             binary-name: opente-extract.exe
     runs-on: ${{ matrix.os }}

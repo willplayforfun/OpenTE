@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             preset: windows-x64
             build-preset: windows-x64-debug
     runs-on: ${{ matrix.os }}
