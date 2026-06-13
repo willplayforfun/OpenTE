@@ -82,6 +82,27 @@ _TEXTURE_PAGE_SOURCES: dict[int, str] = {
 _EDGE_TEXTURE_TAG = "edge"
 _EDGE_SPRITE_ID = "terrain.edge"
 
+# Edge-blend atlas (Stage B, B15 Round 40): a 4x4-cell dithered-dissolve
+# atlas, one per culture palette -- "trch" is `terr/sets/16`'s ("chi1")
+# `tran` field (`data_catalog_terr_sets.txt`).
+_TRAN_TEXTURE_TAG = "trch"
+_TRAN_SPRITE_ID = "terrain.tran"
+
+# `terr/trch` decodes fully opaque (alpha==255 everywhere) with near-black
+# (RGB <= ~0x1F) "dither dot" pixels forming the dissolve pattern -- there is
+# no usable alpha gradient to blend with. Recut it as a hard alpha mask
+# (dot pixels opaque, near-black background fully transparent) so the
+# edge-blend pass (drawn with SDL_BLENDMODE_BLEND) shows only the dissolve
+# dots, letting the base terrain pass show through everywhere else.
+_TRAN_DISSOLVE_THRESHOLD = 8
+
+
+def _apply_dissolve_mask(rgba: bytes, threshold: int = _TRAN_DISSOLVE_THRESHOLD) -> bytes:
+    out = bytearray(rgba)
+    for i in range(0, len(out), 4):
+        out[i + 3] = 255 if max(out[i], out[i + 1], out[i + 2]) > threshold else 0
+    return bytes(out)
+
 # Shore-overlay atlases (Stage C.1).
 _SHORE_ATLAS_TAGS = {
     "coa0": "terrain.coa0",
@@ -146,6 +167,18 @@ def extract_terrain_textures(m_ui_data: bytes, m_ui_root: DirNode,
             entries.append(SpriteEntry(id=_EDGE_SPRITE_ID, file=str(relative_path).replace("\\", "/"),
                                          width=sprite.width, height=sprite.height))
 
-    write_json(output_dir / _TERRAIN_TEXTURES_TABLE_PATH, {"pages": page_sprite_ids})
+    tran_sprite_id = ""
+    tran_leaf = find_leaf(terr_root, [_TRAN_TEXTURE_TAG])
+    if tran_leaf is not None:
+        sprite = decode_sprite(m_ui_data, tran_leaf.abs_off, tran_leaf.size)
+        if sprite is not None:
+            relative_path = Path("sprites") / "terrain" / f"{_TRAN_SPRITE_ID}.png"
+            rgba = _apply_dissolve_mask(sprite.rgba)
+            write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, rgba)
+            entries.append(SpriteEntry(id=_TRAN_SPRITE_ID, file=str(relative_path).replace("\\", "/"),
+                                         width=sprite.width, height=sprite.height))
+            tran_sprite_id = _TRAN_SPRITE_ID
+
+    write_json(output_dir / _TERRAIN_TEXTURES_TABLE_PATH, {"pages": page_sprite_ids, "tran": tran_sprite_id})
 
     return entries

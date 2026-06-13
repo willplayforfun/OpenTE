@@ -57,9 +57,20 @@ public:
     /// passes at water/land boundaries.
     bool shore_overlays_enabled = false;
 
+    /// "Terrain blending" (`+0x24a`, Stage B.5): when false, skip the
+    /// edge-blend (`tran` atlas) passes between same-class,
+    /// differently-textured neighboring tiles.
+    bool terrain_blending_enabled = false;
+
 private:
     /// Returns `region_->texture_index_at(tx, ty)`
     int texture_index_at(int tx, int ty) const;
+
+    /// Draws Stage B's up-to-4 edge-blend passes (one per N/E/S/W neighbor
+    /// in the same water/land class but with a different texture index) for
+    /// tile `(tx, ty)`, reusing `corners`' screen positions/colors (only UVs
+    /// differ from the base pass).
+    void render_edge_blends(int tx, int ty, const SDL_Vertex corners[4]) const;
 
     /// Draws Stage C's up-to-2 shore-overlay passes for tile `(tx, ty)`,
     /// reusing `corners`' screen positions/colors (only UVs differ from the
@@ -73,6 +84,11 @@ private:
     /// `world::Region::texture_index_at`; index 0 is unused. Loaded from
     /// `tables/terrain_textures.json` by `load_textures`.
     std::array<Texture, 14> terrain_page_textures_;
+
+    /// Edge-blend atlas (Stage B, B15 Round 40): a 4x4-cell dithered-dissolve
+    /// atlas (`terrain.tran`), one per culture palette. Loaded from
+    /// `tables/terrain_textures.json`'s `"tran"` entry by `load_textures`.
+    Texture tran_atlas_texture_;
 
     /// Shore-overlay atlases (Stage C.1): `[0]` = `terrain.coa0`, `[1]` =
     /// `terrain.coa1`, both full 256x256 native-resolution textures.

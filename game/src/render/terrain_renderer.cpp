@@ -31,6 +31,45 @@ constexpr int kQuadIndices[6] = {0, 1, 2, 0, 2, 3};
 constexpr int kDirDx[8] = {-1, 0, 1, 1, 1, 0, -1, -1};
 constexpr int kDirDy[8] = {-1, -1, -1, 0, 1, 1, 1, 0};
 
+/// Stage B: the `tran` edge-blend atlas is a 4x4-cell grid of 64x64px
+/// dithered-dissolve cells in a 256x256 atlas, cell selection addressed with
+/// a half-texel inset on the near edge (B15 Round 40: `u = (cell*64 +
+/// 0.5)/256`).
+constexpr float kTranCellUV = 64.0f / 256.0f;
+constexpr float kTranInsetUV = 0.5f / 256.0f;
+
+/// 2026-06-13 visual check: sampling the *full* 64px cell (as the raw EXE
+/// formula does, `u1 = u0 + 63/256`) onto the same screen quad as the base
+/// terrain pass made the dissolve dots look noticeably smaller/denser than
+/// the base texture's features. The base pass samples a 32x16px region of
+/// its 256x256 texture per tile, magnified 2x onto the 64x32 screen diamond
+/// (terrain-blending-plan.md Stage A.0); to match that apparent scale, only
+/// sample *half* of each `tran` cell (32x32px) per tile -- i.e. halve the
+/// sampled UV span on both axes (still anchored at the cell's near corner
+/// `(u0,v0)`, just covering less of the cell).
+constexpr float kTranSampleUV = 32.0f / 256.0f;
+
+/// Stage B: the 4 edge-blend directions, in `world-and-maps.md`'s 8-direction
+/// order (1=N, 3=E, 5=S, 7=W -- the cardinal directions of `0x42acf0`'s
+/// `for (dir = 1; dir < 8; dir += 2)` loop), and the per-direction cell-corner
+/// rotation index `k` used by `m = (j - k) mod 4` (tile corner `j`,
+/// NW=0,NE=1,SE=2,SW=3, gets `tran`-cell corner `corner_u/corner_v[m]`, where
+/// `corner_u/v[m]` for m=0..3 is `(u1,v1),(u0,v1),(u0,v0),(u1,v0)` -- see
+/// `render_edge_blends`).
+///
+/// The raw disassembly of `0x42acf0` (`exe_blend_draw_dump.txt`, offsets
+/// 0x42ae0b-0x42aec3) gives `k_raw = ((dir+1)&7)>>1` = `{1,2,3,0}` for
+/// dirs {1,3,5,7} (N,E,S,W) -- this assumes the EXE's 4-corner vertex slots
+/// 1-4 map onto screen corners NW,NE,SE,SW in that same order (`j` =
+/// vertex-slot index directly). 2026-06-13 visual checks found `k_raw`
+/// rotated 90 degrees from correct, and the first correction tried
+/// (`k_raw - 1 = {0,1,2,3}`) was off by 90 degrees the *other* way.
+/// `kEdgeBlendK` below (`k_raw + 1 mod 4 = {2,3,0,1}`) is the value that
+/// renders correctly -- i.e. vertex slot `v` corresponds to screen corner
+/// `j=(v-1) mod 4`, which folds into `m=(j-k)mod4` as `k_eff = k_raw + 1`.
+constexpr int kEdgeBlendDirs[4] = {1, 3, 5, 7};
+constexpr int kEdgeBlendK[4] = {2, 3, 0, 1};
+
 /// Stage C.2: 8-bit water-neighbor mask (bit `d` set iff direction-`d`
 /// neighbor is water-class, `texture_index <= 2`) -> overlay1 cell code.
 /// `255` = no overlay. `0-52` index `terrain.coa0`'s cells via
@@ -202,6 +241,13 @@ void TerrainRenderer::load_textures(const std::filesystem::path& game_data_dir,
             shore_atlas_textures_[i] = Texture::load(renderer_, *path);
         }
     }
+
+    const std::string tran_sprite_id = j.value("tran", std::string{});
+    if (!tran_sprite_id.empty()) {
+        if (const std::optional<std::filesystem::path> path = find_sprite_file(tran_sprite_id)) {
+            tran_atlas_texture_ = Texture::load(renderer_, *path);
+        }
+    }
 }
 
 int TerrainRenderer::texture_index_at(int tx, int ty) const {
@@ -285,11 +331,65 @@ void TerrainRenderer::render(const Camera& camera) const {
                 SDL_RenderGeometry(renderer_, nullptr, verts, 4, kQuadIndices, 6);
             }
 
+            // Stage B: edge-blend passes between same-class,
+            // differently-textured neighboring tiles.
+            if (terrain_blending_enabled && terrain_textures_enabled) {
+                render_edge_blends(tx, ty, verts);
+            }
+
             // Stage C: shore-overlay passes at water/land boundaries.
             if (shore_overlays_enabled && terrain_textures_enabled) {
                 render_shore_overlays(tx, ty, verts);
             }
         }
+    }
+}
+
+void TerrainRenderer::render_edge_blends(int tx, int ty, const SDL_Vertex corners[4]) const {
+    if (!tran_atlas_texture_.valid()) {
+        return;
+    }
+
+    const int own_index = texture_index_at(tx, ty);
+    const bool own_is_water = own_index <= 2;
+
+    // B.2: for each of the 4 cardinal directions, queue an edge-blend pass
+    // if the neighbor is in the same water/land class but uses a different
+    // texture page. Map-edge tiles (no neighbor) are skipped.
+    for (int i = 0; i < 4; ++i) {
+        const int dir = kEdgeBlendDirs[i];
+        const int nx = tx + kDirDx[dir];
+        const int ny = ty + kDirDy[dir];
+        if (nx < 0 || nx >= region_->width() || ny < 0 || ny >= region_->height()) {
+            continue;
+        }
+
+        const int nbr_index = texture_index_at(nx, ny);
+        if (nbr_index == own_index || (nbr_index <= 2) != own_is_water) {
+            continue;
+        }
+
+        // B.3: UV rect for the `tran` atlas cell selected by the neighbor's
+        // texture-page index (`col = nbr & 3`, `row = nbr >> 2`). Per-corner
+        // assignment per `kEdgeBlendK`'s doc comment above.
+        const int cell_col = nbr_index & 3;
+        const int cell_row = nbr_index >> 2;
+        const float u0 = static_cast<float>(cell_col) * kTranCellUV + kTranInsetUV;
+        const float v0 = static_cast<float>(cell_row) * kTranCellUV + kTranInsetUV;
+        const float u1 = u0 + kTranSampleUV - 2.0f * kTranInsetUV;
+        const float v1 = v0 + kTranSampleUV - 2.0f * kTranInsetUV;
+        // corner_u/v[m] for m=0..3: (u1,v1), (u0,v1), (u0,v0), (u1,v0)
+        const float corner_u[4] = {u1, u0, u0, u1};
+        const float corner_v[4] = {v1, v1, v0, v0};
+
+        const int k = kEdgeBlendK[i];
+        SDL_Vertex verts[4];
+        std::copy(corners, corners + 4, verts);
+        for (int j = 0; j < 4; ++j) {
+            const int m = ((j - k) % 4 + 4) % 4;
+            verts[j].tex_coord = {corner_u[m], corner_v[m]};
+        }
+        SDL_RenderGeometry(renderer_, tran_atlas_texture_.handle(), verts, 4, kQuadIndices, 6);
     }
 }
 
