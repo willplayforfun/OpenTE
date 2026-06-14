@@ -230,6 +230,9 @@ void App::render() {
     if (show_dev_gui_) {
         render_dev_gui();
     }
+    if (show_lighting_window_) {
+        render_lighting_window();
+    }
     ImGui::Render();
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
 
@@ -285,7 +288,49 @@ void App::render_dev_gui() {
             ImGui::Checkbox("Terrain blending", &terrain_renderer_->terrain_blending_enabled);
             ImGui::Checkbox("Debug labels", &terrain_renderer_->terrain_debug_labels_enabled);
         }
+        ImGui::Separator();
+        if (ImGui::Button("Lighting controls...")) {
+            show_lighting_window_ = true;
+        }
     }
+    ImGui::End();
+}
+
+void App::render_lighting_window() {
+    ImGui::Begin("Lighting controls", &show_lighting_window_);
+
+    if (!terrain_renderer_) {
+        ImGui::TextUnformatted("No terrain loaded.");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::TextWrapped(
+        "Adjust the terrain slope-shading lighting in realtime. Changes "
+        "rebuild the per-vertex mesh colors immediately.");
+    ImGui::Separator();
+
+    bool changed = false;
+    changed |= ImGui::DragFloat("Slope gradient scale", &render::kSlopeGradientScale, 0.01f, 0.0f, 20.0f);
+    changed |= ImGui::DragFloat("Ambient R", &render::kAmbientR, 0.001f, 0.0f, 1.0f);
+    changed |= ImGui::DragFloat("Ambient G", &render::kAmbientG, 0.001f, 0.0f, 1.0f);
+    changed |= ImGui::DragFloat("Ambient B", &render::kAmbientB, 0.001f, 0.0f, 1.0f);
+    changed |= ImGui::DragFloat("Vertex color scale", &render::kVertexColorScale, 0.01f, 0.0f, 4.0f);
+
+    ImGui::Separator();
+    if (ImGui::Button("Reset to EXE defaults")) {
+        render::kSlopeGradientScale = 2.0f;
+        render::kAmbientR = 0.1369999945f;
+        render::kAmbientG = 0.0430000015f;
+        render::kAmbientB = 0.0f;
+        render::kVertexColorScale = 1.7f;
+        changed = true;
+    }
+
+    if (changed) {
+        terrain_renderer_->rebuild_vertex_colors();
+    }
+
     ImGui::End();
 }
 

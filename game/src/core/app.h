@@ -65,8 +65,15 @@ private:
 
     bool running_ = false;
     bool show_dev_gui_ = false;
+    bool show_lighting_window_ = false;
 
     void render_dev_gui();
+
+    /// Renders the second dev window: realtime sliders for the terrain
+    /// slope-shading lighting globals (render::kSlopeGradientScale,
+    /// kAmbientR/G/B, kVertexColorScale). Rebuilds the terrain vertex colors
+    /// whenever a value changes.
+    void render_lighting_window();
 
     // Held-key state for continuous (per-frame) camera panning.
     bool pan_left_ = false;

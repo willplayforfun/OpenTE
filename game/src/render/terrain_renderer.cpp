@@ -215,8 +215,17 @@ TerrainRenderer::TerrainRenderer(SDL_Renderer* renderer, const world::Region& re
         }
     }
 
+    rebuild_vertex_colors();
+}
+
+void TerrainRenderer::rebuild_vertex_colors() {
+    const int vw = region_->width() + 1;   // num verts along width
+    const int vh = region_->height() + 1;  // num verts along height
+
     // Per-vertex slope shading: 8-neighbor cross-product normal, per-channel
-    // ambient (EXE-confirmed from TMapView virtual_252 @ 0x468b50).
+    // ambient (EXE-confirmed from TMapView virtual_252 @ 0x468b50). Reads the
+    // mutable render::kSlopeGradientScale/kAmbient*/kVertexColorScale globals,
+    // so re-running this after they change re-tints the mesh in place.
     auto vertex_height = [&](int col, int row) -> float {
         col = std::clamp(col, 0, vw - 1);
         row = std::clamp(row, 0, vh - 1);
@@ -394,12 +403,17 @@ void TerrainRenderer::render(const Camera& camera) const {
             // corners.  Matches the original's D3DPT_TRIANGLEFAN geometry
             // (center + 4 corners + closing repeat = 4 triangles through the
             // center, avoiding the diagonal-seam artifact of a 2-triangle split).
+            const bool is_water = own_index <= 2;
+            const float water_h = static_cast<float>(region_->sea_level()) * kPixelsPerAltiUnit;
+
             SDL_Vertex verts[5];
             for (int c = 0; c < 4; ++c) {
                 const int col = tx + kCornerCol[c];
                 const int row = ty + kCornerRow[c];
                 const std::size_t vidx = static_cast<std::size_t>(row) * vw + col;
-                const float height_offset = terrain_vertex_height_[vidx] * kPixelsPerAltiUnit;
+                const float height_offset = is_water
+                    ? water_h
+                    : terrain_vertex_height_[vidx] * kPixelsPerAltiUnit;
 
                 Vec2 world_pos = tile_to_world(static_cast<float>(col), static_cast<float>(row));
                 world_pos.y -= height_offset;
@@ -418,11 +432,9 @@ void TerrainRenderer::render(const Camera& camera) const {
             // height comes directly from the heightmap (or sea_level for water),
             // not from averaging neighbors.
             {
-                const float center_h =
-                    (own_index <= 2)
-                        ? static_cast<float>(region_->sea_level())
-                        : static_cast<float>(region_->height_at(tx, ty));
-                const float center_h_offset = center_h * kPixelsPerAltiUnit;
+                const float center_h_offset = is_water
+                    ? water_h
+                    : static_cast<float>(region_->height_at(tx, ty)) * kPixelsPerAltiUnit;
                 Vec2 center_world = tile_to_world(
                     static_cast<float>(tx) + 0.5f,
                     static_cast<float>(ty) + 0.5f);

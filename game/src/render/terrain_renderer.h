@@ -39,6 +39,13 @@ public:
     /// base texture pass, shore-overlay passes, for every tile in the region.
     void render(const Camera& camera) const;
 
+    /// Recomputes the per-vertex slope-shading colors (`terrain_vertex_color_`)
+    /// from the (immutable) vertex heightmap and the current values of the
+    /// `render::kSlopeGradientScale`/`kAmbient*`/`kVertexColorScale` globals.
+    /// Called once at construction; the dev GUI calls it again whenever those
+    /// lighting values are adjusted at runtime.
+    void rebuild_vertex_colors();
+
     /// Returns the (averaged, vertex-grid) `mapp.alti` height in raw byte
     /// units at the grid vertex nearest tile coordinate `(x, y)`, clamped to
     /// the vertex grid's bounds. Multiply by `render::kPixelsPerAltiUnit` for

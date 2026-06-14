@@ -42,7 +42,10 @@ struct Vec3 {
 /// Height-difference multiplier for the 8 direction vectors used in the
 /// cross-product normal computation: each neighbor's direction vector is
 /// Vec3(dx, dy, (h_neighbor - h_center) * kSlopeGradientScale).
-constexpr float kSlopeGradientScale = 2.0f;  // [TMapView+0x238]  0x40400000
+/// Runtime-adjustable (via the dev GUI's lighting window) -- `inline` rather
+/// than `constexpr` so a single mutable definition is shared across TUs.
+//inline float kSlopeGradientScale = 2.0f;  // [TMapView+0x238]  0x40400000
+inline float kSlopeGradientScale = 1.6f;    // dialed in
 
 /// Fixed light direction (normalized). Computed in the EXE from elevation
 /// = 0.85 rad and azimuth = 6.08 rad via sin/cos, then normalized.
@@ -51,9 +54,11 @@ constexpr Vec3 kLightDir = {0.7358256578f, 0.1516010314f, 0.6599830985f};
 /// Per-channel ambient coefficients. Shadowed faces get a warm reddish
 /// tint (higher R ambient) rather than uniform gray.
 /// Formula: byte = min(255, int(((1 - ambient) * max(0, dot) + ambient) * 2 * 255))
-constexpr float kAmbientR = 0.1369999945f;  // [TMapView+0x23c]  0x3E0C49BA
-constexpr float kAmbientG = 0.0430000015f;  // [TMapView+0x240]  0x3D3020C5
-constexpr float kAmbientB = 0.0f;           // [TMapView+0x244]  0x00000000
+/// Runtime-adjustable (dev GUI lighting window); see kSlopeGradientScale.
+//inline float kAmbientR = 0.1369999945f;  // [TMapView+0x23c]  0x3E0C49BA
+inline float kAmbientR = 0.116f;         // dialed in
+inline float kAmbientG = 0.0430000015f;  // [TMapView+0x240]  0x3D3020C5
+inline float kAmbientB = 0.0f;           // [TMapView+0x244]  0x00000000
 
 /// The original game uses D3DTOP_MODULATE2X (value 5) for the terrain base
 /// pass, which doubles the result of (vertex_color × texture) at the D3D7
@@ -62,7 +67,8 @@ constexpr float kAmbientB = 0.0f;           // [TMapView+0x244]  0x00000000
 /// of the original's brightness on flat areas (dot≈0.66 → vertex ~180/255).
 /// A future fix could pre-brighten terrain textures by 2× during extraction
 /// to compensate; for now we match the EXE's vertex colors exactly.
-constexpr float kVertexColorScale = 1.7f;
+/// Runtime-adjustable (dev GUI lighting window); see kSlopeGradientScale.
+inline float kVertexColorScale = 1.2f; // dialed in
 
 struct Vec2 {
     float x = 0;
