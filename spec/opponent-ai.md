@@ -172,11 +172,12 @@ the rules those moves must obey or the state they act on.
   order-replan function, the three "advisor" objects, nor the economic-score
   computation's data fields have been decoded. This is the blocker for a
   faithful `classic` `ai_mode` (see "AI modes" above).
-- **`char.orde`/`invo` decoding** (see [world-and-maps.md](world-and-maps.md)
-  and [entities.md](entities.md) Open questions) could, if completed, reveal
-  the original's actual order-queue structure and provide a stronger
-  reference for Stage 2's `modern`-mode design — currently `TradeOrder` is a
-  clean-room approximation of "what such a queue would need to contain".
-  This is independent of the `classic`/`modern` split above (both modes use
-  the same `TradeOrder` representation; only the decision logic that fills it
-  differs).
+- ~~**`char.orde`/`invo` decoding**~~ **Resolved** — `char.orde` is a
+  small (2-8 slot) ring-buffer of order records. Each slot has a `type`
+  discriminator: `type=1` (travel), `type=2` (trade: `mark` + `tran` +
+  commodity-qty), `type=3` (terminal sentinel marking end of active route),
+  `type=4` (return-to-depot). The real data validates `entities.md`'s
+  clean-room `TradeOrder{kind, commodity_id, quantity, target_market}`
+  design — the original's structure matches that shape. `char.invl` uses
+  the same ring format but is always empty in observed saves (population
+  trigger unknown, low priority).

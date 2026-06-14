@@ -188,7 +188,7 @@ goal) request:
   `movement_costs`'s consumer is found, do not treat the clone's
   richer-routing choice as settled; see Open questions. Per-network
   *speed* (tiles/tick, from `transporters.json`'s `by_episode.<ep>.speed`,
-  T0.1) remains a separate *transporter* property controlling how fast a
+  see `transporters.json`) remains a separate *transporter* property controlling how fast a
   given path is traversed regardless of how this gap resolves. Diagonal steps
   cost `sqrt(2) * base_cost` as usual.
 - **Heuristic**: Chebyshev or octile distance to the goal (admissible for
@@ -235,15 +235,17 @@ goal) request:
   `(width, height)` swaps under rotation isn't confirmed from RE. Default
   to "footprint dimensions are as-stored regardless of rotation" (i.e.
   rotation is purely visual) until shown otherwise.
-- ~~**Per-transporter network access**~~ **Resolved** (T0.1): each
+- ~~**Per-transporter network access**~~ **Resolved** (see `transporters.json`): each
   transporter's `by_episode.<ep>.speed` map in `transporters.json` gives a
   speed per network type, with `0` meaning "cannot use this network" — e.g.
   Camel (`came`) has nonzero `none`/`road`/`trai`/`dese` but `0` for
   `cana`/`deep`/`rail`; Galley (`galy`) has nonzero `cana`/`deep` only. No
   `depot_class`-based heuristic is needed; use the per-episode speed map
   directly.
-- **`char.abil` value 132** (out of the documented 0-12 ability range) —
-  RE notes suggest this might be a bitmask of multiple granted abilities
-  rather than a single index. The clone's `MerchantState.ability` as a
-  single `int` may need to become a bitset/vector if multi-ability
-  merchants turn out to matter.
+- ~~**`char.abil` value 132**~~ **Resolved** — the live save-game field
+  `enti.char.abil` IS a bitmask over the 13-ability set (e.g. 132 = bits
+  2+7 = abilities 2 and 7). This is distinct from the static roster field
+  `epis.<ep>.merc.<i>.abil` (a single ability index 0-12, the "advertised"
+  ability at hire). `MerchantState.ability` should be a `std::bitset<13>`
+  (or equivalent) for the live/save representation; the hiring UI keeps a
+  separate single "advertised ability" index.

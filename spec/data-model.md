@@ -330,7 +330,7 @@ The largest/most structurally complex table. Per episode:
   [simulation.md](simulation.md)'s production/consumption model — no more
   "raw bytes" placeholder.
 - **`movement_costs`** (original `epis.<ep>.path`, renamed from
-  `trade_paths` — it is **not** trade routes) is **resolved** (T0.3): a
+  `trade_paths` — it is **not** trade routes) is **resolved**: a
   per-pathway-type movement-cost matrix. Each key (`trai`/`road`/`rail`/
   `cana`) is a pathway/network type a transporter can use; its value gives
   the cost of traversing a tile carrying that network type, indexed by
@@ -483,8 +483,12 @@ would want to tweak.
 
 ## Open questions / RE gaps
 
-- **`tech.<ep>.<id>.excl`** (`0` or `600`) — purpose unknown; passed through
-  opaquely (see above).
+- ~~**`tech.<ep>.<id>.excl`**~~ **Resolved** — a tick-count "exclusivity
+  window" countdown (values `0` or `600`). When a tech is purchased, if
+  `excl > 0`, the tech enters a countdown state lasting that many ticks; the
+  progress-panel UI shows `pric` scaled by the fraction of the countdown
+  elapsed (snapped to 5% steps). `excl == 0` means no such window. In
+  `technologies.json`, this is `exclusivity_ticks: int`.
 - **`game` table** (global engine constants like cursor timing/UI colors) —
   not modeled; the clone has its own UI/engine config.
 

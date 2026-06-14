@@ -206,20 +206,34 @@ adjacent tiles in direction `dir`:
 3. (Original behavior, optional for clone) clear any decoration on the
    affected tiles ("remove the tree now under the road").
 
-### Initial population from terrain
+### Initial population from map data
 
-At map load, the clone should derive an initial connectivity grid from
-`terrain.data`:
+At map load, connectivity is seeded from two sources:
 
-- `deep_water` tiles: `deep_water = 0xFF` (all directions navigable).
-- Land tiles adjacent to water: leave `canal`/`deep_water` at `0` until a
-  canal is built (canals are player-constructed).
-- All other networks (`trail`/`road`/`rail`) start at `0` everywhere —
-  buildable only where the player constructs them, **except** the
-  `trail_extra` bit may be pre-set on certain "natural path" terrain types
-  if the clone wants pre-existing trails on some maps (the original's
-  precomputed hash map presumably encoded this from terrain at load time;
-  exact source data not recovered — see Open questions).
+1. **Terrain defaults**: `deep_water` tiles get `deep_water = 0xFF` (all
+   directions navigable). Land tiles start with all pathway networks at `0`
+   (buildable only where the player constructs them).
+
+2. **Pre-authored `paths[]`/`bridges[]` arrays**: the original's map files
+   contain explicit per-tile connectivity records (`mapp.path` and
+   `mapp.brid` arrays, each entry `{x, y, connectivity_mask}`). These seed
+   pre-built roads, trails, and bridges at their authored positions with
+   their authored connectivity masks. The `brid` (bridge) entries
+   merge-on-top-of the existing connectivity for their tiles, preserving any
+   terrain-default connectivity already set. Maps with no pre-built
+   infrastructure simply have empty arrays (equivalent to the
+   terrain-defaults-only case).
+
+   The map JSON schema should include:
+   ```json
+   "paths": [
+     { "x": 45, "y": 62, "trail_extra": 5, "road": 0, "rail": 0, "canal": 0 }
+   ],
+   "bridges": [
+     { "x": 50, "y": 30, "trail_extra": 0, "road": 10, "rail": 0, "canal": 0 }
+   ]
+   ```
+   (Per-network bitmasks matching the `TileConnectivity` struct above.)
 
 ## In-memory world model
 
@@ -313,17 +327,12 @@ merchant order queues, etc.), which directly shapes the entity schema in
   mean e.g. "desert" tiles are extracted as "plains". The map JSON schema is
   unaffected either way (only the extractor's mapping table changes), but
   this is tracked as a real open RE question, not a deferred polish item.
-- **OPEN — Pre-existing trails from terrain data** (RE gap,
-  [`implementation/spec-deviations.md`](../implementation/spec-deviations.md)
-  item 9): whether the original pre-populates any `trail_extra` connectivity
-  from terrain at map load, or whether all pathway connectivity starts empty
-  and is purely player-constructed, was never investigated/confirmed — there
-  is no RE finding either way. The clone currently defaults to "empty, fully
-  player-constructed"; this is a **stand-in for an unanswered question**, not
-  a confirmed match to the original. If a map turns out to need pre-existing
-  trails to be playable (e.g. matching `enti`-derived starting state from
-  workstream G/H), that would indicate the original does pre-populate
-  connectivity.
+- ~~**Pre-existing trails from terrain data**~~ **Resolved** — the original
+  pre-populates connectivity at map load from explicit per-tile
+  `mapp.path`/`mapp.brid` arrays (map-editor-authored pre-built
+  roads/trails/bridges with explicit connectivity masks), NOT from a generic
+  terrain-type scan. Maps with no pre-built infrastructure have empty arrays.
+  See "Initial population from map data" above.
 - **Determinism for multiplayer/replay**: if lockstep multiplayer or
   deterministic replay is ever desired, float tile coordinates and
   non-deterministic floating-point summation order could cause desyncs.
