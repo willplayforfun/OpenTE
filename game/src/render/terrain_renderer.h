@@ -60,7 +60,7 @@ public:
     /// "Terrain blending" (`+0x24a`, Stage B.5): when false, skip the
     /// edge-blend (`tran` atlas) passes between same-class,
     /// differently-textured neighboring tiles.
-    bool terrain_blending_enabled = false;
+    bool terrain_blending_enabled = true;
 
     /// Map-edge skirts: vertical quads that drop from the terrain mesh edge
     /// down to sea level, giving mountains a visible cross-section.  Uses

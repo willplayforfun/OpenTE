@@ -154,7 +154,8 @@ def extract_terrain_textures(m_ui_data: bytes, m_ui_root: DirNode,
         if sprite is None:
             continue
         relative_path = Path("sprites") / "terrain" / f"{sprite_id}.png"
-        write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, sprite.rgba)
+        rgba = _apply_dissolve_mask(sprite.rgba)
+        write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, rgba)
         entries.append(SpriteEntry(id=sprite_id, file=str(relative_path).replace("\\", "/"),
                                      width=sprite.width, height=sprite.height))
 

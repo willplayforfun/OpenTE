@@ -52,21 +52,19 @@ constexpr int kDirDy[8] = {-1, -1, -1, 0, 1, 1, 1, 0};
 
 /// Stage B: the `tran` edge-blend atlas is a 4x4-cell grid of 64x64px
 /// dithered-dissolve cells in a 256x256 atlas, cell selection addressed with
-/// a half-texel inset on the near edge (B15 Round 40: `u = (cell*64 +
-/// 0.5)/256`).
+/// a half-texel inset on each edge (B15 Round 40: `u_near = (cell*64 +
+/// 0.5)/256`, `u_far = u_near + 63/256`).  The EXE samples the full cell;
+/// a previous "half-cell" tweak was caused by confounding UV-interpolation
+/// artifacts from the missing center vertex (see kTranFanIndices).
 constexpr float kTranCellUV = 64.0f / 256.0f;
 constexpr float kTranInsetUV = 0.5f / 256.0f;
 
-/// 2026-06-13 visual check: sampling the *full* 64px cell (as the raw EXE
-/// formula does, `u1 = u0 + 63/256`) onto the same screen quad as the base
-/// terrain pass made the dissolve dots look noticeably smaller/denser than
-/// the base texture's features. The base pass samples a 32x16px region of
-/// its 256x256 texture per tile, magnified 2x onto the 64x32 screen diamond
-/// (terrain-blending-plan.md Stage A.0); to match that apparent scale, only
-/// sample *half* of each `tran` cell (32x32px) per tile -- i.e. halve the
-/// sampled UV span on both axes (still anchored at the cell's near corner
-/// `(u0,v0)`, just covering less of the cell).
-constexpr float kTranSampleUV = 32.0f / 256.0f;
+/// Stage B: 5-vertex triangle fan emulating D3DPT_TRIANGLEFAN.  Vertex 0 is
+/// the tile center (with midpoint UVs), vertices 1-4 are the NW/NE/SE/SW
+/// corners.  The EXE's 6-vertex fan (center, 4 corners, closing repeat) is
+/// equivalent to these 4 triangles:
+///   (center, NW, NE), (center, NE, SE), (center, SE, SW), (center, SW, NW).
+constexpr int kTranFanIndices[12] = {0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1};
 
 /// Stage B: the 4 edge-blend directions, in `world-and-maps.md`'s 8-direction
 /// order (1=N, 3=E, 5=S, 7=W -- the cardinal directions of `0x42acf0`'s
@@ -132,7 +130,7 @@ constexpr int kShoreDlToShape[15] = {1, 2, 3, 0, 5, 4, 6, 9, 8, 7, 10, 11, 12, 1
 
 /// Stage C.3: 53-cell UV-index array (`exe_b15_round37_shore_tables.txt`,
 /// "UV-index array @ 0x5f8940"). Each `(idx0, idx1)` is an index into the
-/// float-constant array at `0x5f88f0` (`shore_uv_origin` below); cells 0-14
+/// float-constant array at `0x5f88f0` (`shore_uv` below); cells 0-14
 /// are the `shape` cells used by overlay2, the full 53 are used by
 /// overlay1's `kShoreLUT0` codes 0-52.
 constexpr std::pair<int, int> kShoreUvIndex[53] = {
@@ -146,20 +144,21 @@ constexpr std::pair<int, int> kShoreUvIndex[53] = {
     {2, 15},  {6, 15},  {10, 15}, {14, 15},
 };
 
-/// `0x5f88f0`'s float-constant array, as used by the UV-index lookup:
-/// `float[k] = (k - 2) / 16` for `k >= 2`, and `~0` for `k < 2` (the dump's
-/// `[0]`/`[1]` are denormal near-zero values). Converts a `kShoreUvIndex`
-/// component to a UV-space origin in `[0, 1]` (a fraction of the 256x256
-/// shore atlas).
-constexpr float shore_uv_origin(int idx) {
-    return idx <= 2 ? 0.0f : static_cast<float>(idx - 2) / 16.0f;
+/// Shore-atlas UV float array (`0x5f88f0`): `float[k] = (k - 2) / 16` for
+/// `k >= 2`, `~0` for `k < 2`.  Each cell in the atlas is a 64x32-pixel
+/// isometric DIAMOND (U span = 4/16 = 0.25, V span = 2/16 = 0.125), laid out
+/// in a staggered brick grid.  For a cell with `kShoreUvIndex` = `(idx0, idx1)`:
+///   LEFT_U  = float_arr[idx0]   = (idx0 - 2) / 16
+///   MID_U   = float_arr[idx0+2] = idx0 / 16
+///   RIGHT_U = float_arr[idx0+4] = (idx0 + 2) / 16
+///   TOP_V   = float_arr[idx1+1] = (idx1 - 1) / 16
+///   MID_V   = float_arr[idx1+2] = idx1 / 16
+///   BOT_V   = float_arr[idx1+3] = (idx1 + 1) / 16
+/// The 4-corner quad maps: NW=(MID_U,TOP_V), NE=(RIGHT_U,MID_V),
+///                          SE=(MID_U,BOT_V), SW=(LEFT_U,MID_V).
+constexpr float shore_uv(int raw_idx) {
+    return raw_idx <= 2 ? 0.0f : static_cast<float>(raw_idx - 2) / 16.0f;
 }
-
-/// Stage C.3: UV-space size of one shore-atlas cell -- the spacing between
-/// adjacent `kShoreUvIndex` entries (e.g. cells 0/1: idx0 2 -> 6, i.e.
-/// `shore_uv_origin(2)`=0 -> `shore_uv_origin(6)`=0.25, over 2 grid steps of
-/// `1/16` each = `2/16`).
-constexpr float kShoreCellSize = 2.0f / 16.0f;
 
 }  // namespace
 
@@ -258,6 +257,9 @@ void TerrainRenderer::load_textures(const std::filesystem::path& game_data_dir,
     for (std::size_t i = 0; i < shore_atlas_textures_.size(); ++i) {
         if (const std::optional<std::filesystem::path> path = find_sprite_file(kShoreAtlasSpriteIds[i])) {
             shore_atlas_textures_[i] = Texture::load(renderer_, *path);
+            if (shore_atlas_textures_[i].valid()) {
+                SDL_SetTextureBlendMode(shore_atlas_textures_[i].handle(), SDL_BLENDMODE_BLEND);
+            }
         }
     }
 
@@ -265,6 +267,9 @@ void TerrainRenderer::load_textures(const std::filesystem::path& game_data_dir,
     if (!tran_sprite_id.empty()) {
         if (const std::optional<std::filesystem::path> path = find_sprite_file(tran_sprite_id)) {
             tran_atlas_texture_ = Texture::load(renderer_, *path);
+            if (tran_atlas_texture_.valid()) {
+                SDL_SetTextureBlendMode(tran_atlas_texture_.handle(), SDL_BLENDMODE_BLEND);
+            }
         }
     }
 
@@ -400,62 +405,83 @@ void TerrainRenderer::render_edge_blends(int tx, int ty, const SDL_Vertex corner
             continue;
         }
 
-        // B.3: UV rect for the `tran` atlas cell selected by the neighbor's
-        // texture-page index (`col = nbr & 3`, `row = nbr >> 2`). Per-corner
-        // assignment per `kEdgeBlendK`'s doc comment above.
+        // B.3: UV rect for the `tran` atlas cell, full 64px cell with
+        // half-texel inset (EXE: u_far = u_near + 63/256).
         const int cell_col = nbr_index & 3;
         const int cell_row = nbr_index >> 2;
         const float u0 = static_cast<float>(cell_col) * kTranCellUV + kTranInsetUV;
         const float v0 = static_cast<float>(cell_row) * kTranCellUV + kTranInsetUV;
-        const float u1 = u0 + kTranSampleUV - 2.0f * kTranInsetUV;
-        const float v1 = v0 + kTranSampleUV - 2.0f * kTranInsetUV;
+        const float u1 = u0 + kTranCellUV - 2.0f * kTranInsetUV;
+        const float v1 = v0 + kTranCellUV - 2.0f * kTranInsetUV;
+        const float u_mid = (u0 + u1) * 0.5f;
+        const float v_mid = (v0 + v1) * 0.5f;
         // corner_u/v[m] for m=0..3: (u1,v1), (u0,v1), (u0,v0), (u1,v0)
         const float corner_u[4] = {u1, u0, u0, u1};
         const float corner_v[4] = {v1, v1, v0, v0};
 
         const int k = kEdgeBlendK[i];
-        SDL_Vertex verts[4];
-        std::copy(corners, corners + 4, verts);
+
+        // 5-vertex triangle fan: V0=center, V1..V4=NW/NE/SE/SW corners.
+        // Matches the EXE's D3DPT_TRIANGLEFAN(6 verts) geometry exactly.
+        SDL_Vertex fan[5];
+        fan[0].position = {
+            (corners[0].position.x + corners[1].position.x +
+             corners[2].position.x + corners[3].position.x) * 0.25f,
+            (corners[0].position.y + corners[1].position.y +
+             corners[2].position.y + corners[3].position.y) * 0.25f};
+        fan[0].color = corners[0].color;
+        fan[0].tex_coord = {u_mid, v_mid};
         for (int j = 0; j < 4; ++j) {
             const int m = ((j - k) % 4 + 4) % 4;
-            verts[j].tex_coord = {corner_u[m], corner_v[m]};
+            fan[1 + j].position = corners[j].position;
+            fan[1 + j].color = corners[j].color;
+            fan[1 + j].tex_coord = {corner_u[m], corner_v[m]};
         }
-        SDL_RenderGeometry(renderer_, tran_atlas_texture_.handle(), verts, 4, kQuadIndices, 6);
+        SDL_RenderGeometry(renderer_, tran_atlas_texture_.handle(),
+                           fan, 5, kTranFanIndices, 12);
     }
 }
 
 void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex corners[4]) const {
-    // UV rect for shore-atlas cell `cell` (`kShoreUvIndex`): the cell is a
-    // `kShoreCellSize`-square region of the atlas, mapped onto the quad's
-    // diamond corners in the same NW/NE/SE/SW order as `corners` (Stage C.3
-    // open item: this square-to-diamond mapping is a documented
-    // approximation pending visual validation against the original).
+    // Each shore-atlas cell is a 64x32 px diamond in a staggered grid.
+    // The UV mapping places diamond vertices at the 4 quad corners:
+    //   corners[0] NW (screen top)   -> (MID_U,  TOP_V)
+    //   corners[1] NE (screen right) -> (RIGHT_U, MID_V)
+    //   corners[2] SE (screen bottom)-> (MID_U,  BOT_V)
+    //   corners[3] SW (screen left)  -> (LEFT_U,  MID_V)
     auto draw_overlay = [&](const Texture& atlas, int cell) {
         if (!atlas.valid() || cell < 0 || cell >= static_cast<int>(std::size(kShoreUvIndex))) {
             return;
         }
         const auto [idx0, idx1] = kShoreUvIndex[cell];
-        const float u0 = shore_uv_origin(idx0);
-        const float v0 = shore_uv_origin(idx1);
-        const float u1 = u0 + kShoreCellSize;
-        const float v1 = v0 + kShoreCellSize;
+        const float left_u  = shore_uv(idx0);
+        const float mid_u   = shore_uv(idx0 + 2);
+        const float right_u = shore_uv(idx0 + 4);
+        const float top_v   = shore_uv(idx1 + 1);
+        const float mid_v   = shore_uv(idx1 + 2);
+        const float bot_v   = shore_uv(idx1 + 3);
 
         SDL_Vertex verts[4];
         std::copy(corners, corners + 4, verts);
-        verts[0].tex_coord = {u0, v0};  // NW
-        verts[1].tex_coord = {u1, v0};  // NE
-        verts[2].tex_coord = {u1, v1};  // SE
-        verts[3].tex_coord = {u0, v1};  // SW
+        verts[0].tex_coord = {mid_u,   top_v};   // NW = screen top
+        verts[1].tex_coord = {right_u, mid_v};    // NE = screen right
+        verts[2].tex_coord = {mid_u,   bot_v};    // SE = screen bottom
+        verts[3].tex_coord = {left_u,  mid_v};    // SW = screen left
         SDL_RenderGeometry(renderer_, atlas.handle(), verts, 4, kQuadIndices, 6);
     };
 
-    // Overlay pass 1 (C.2): 8-direction water-neighbor mask -> LUT0.
+    // Build the 8-direction water-neighbor mask (shared by both passes).
     int mask = 0;
     for (int dir = 0; dir < 8; ++dir) {
         if (texture_index_at(tx + kDirDx[dir], ty + kDirDy[dir]) <= 2) {
             mask |= (1 << dir);
         }
     }
+    if (mask == 0xFF) {
+        return;
+    }
+
+    // Overlay pass 1 (C.2): 8-direction mask -> LUT0 -> cell code.
     const Uint8 overlay1 = kShoreLUT0[mask];
     if (overlay1 != 255) {
         if (overlay1 <= 52) {
@@ -465,14 +491,19 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
         }
     }
 
-    // Overlay pass 2 (C.3): corner water-flags -> LUT85 -> dl -> shape.
-    static constexpr int kCornerDirs[4] = {0, 2, 4, 6};  // NW, NE, SE, SW
+    // Overlay pass 2 (C.3): concave-corner flags derived from the same mask.
+    // A corner flag fires when BOTH adjacent cardinal neighbors are water AND
+    // the diagonal between them is NOT water — the "inner coastline corner"
+    // that the edge-based overlay1 doesn't cover.
+    //   NW corner: (mask & 0x83) == 0x82  (W+N water, NW not)
+    //   NE corner: (mask & 0x0E) == 0x0A  (N+E water, NE not)
+    //   SE corner: (mask & 0x38) == 0x28  (E+S water, SE not)
+    //   SW corner: (mask & 0xE0) == 0xA0  (S+W water, SW not)
     int flags = 0;
-    for (int corner_dir : kCornerDirs) {
-        if (texture_index_at(tx + kDirDx[corner_dir], ty + kDirDy[corner_dir]) <= 2) {
-            flags |= (1 << corner_dir);
-        }
-    }
+    if ((mask & 0x83) == 0x82) flags |= 0x01;
+    if ((mask & 0x0E) == 0x0A) flags |= 0x04;
+    if ((mask & 0x38) == 0x28) flags |= 0x10;
+    if ((mask & 0xE0) == 0xA0) flags |= 0x40;
     if (flags != 0) {
         const Uint8 dl = kShoreLUT85[flags - 1];
         if (dl != 15) {
