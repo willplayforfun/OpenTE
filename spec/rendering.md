@@ -105,11 +105,17 @@ analysis):
   64x32 per-tile images, not a large shared atlas, so map-spanning UVs just
   sample tiny, heavily-magnified slivers of each page (see Stage A.0's
   updated notes in `terrain-blending-plan.md`).
-- **No skirt/edge-cliff pass**: the original's `alti >= 13` mask is
-  walkability-only and has no renderer-geometry consumer (confirmed by RE).
-  Steep height differences between adjacent tiles simply produce steep
-  quads in the displaced mesh — there is no separate "cliff face" sprite or
-  geometry to draw.
+- **Map-edge skirt pass**: the south and east edges of the map diamond
+  (the two edges facing the camera) get vertical "skirt" quads that drop
+  from each edge vertex's terrain height down to sea level, giving
+  mountains at the map boundary a visible cross-section instead of
+  floating in space.  Textured with the `terrain.edge` gradient (a
+  256×256 vertical gradient, dark at top / earthy-brown at bottom,
+  extracted from `terr/edge` in `m_ui,u.{}`).  Rendered before the main
+  tile pass so the terrain surface naturally overdraws any back-facing
+  skirt geometry.  Toggle: `terrain_skirts_enabled`.  Note: steep height
+  differences between *interior* tiles simply produce steep quads in the
+  displaced mesh — there is no separate cliff-face geometry for those.
 - **Build-once caching**: the heightmap is immutable at runtime (no terrain
   editing in Stage 1), so the vertex height/color grids are computed once at
   load time (`App::build_terrain_mesh()`) and cached; only screen-space
@@ -151,9 +157,8 @@ and `color.a` differ per pass):
   `_TRAN_DISSOLVE_THRESHOLD = 8`), drawn with ordinary `SDL_BLENDMODE_BLEND`
   so only the dissolve dots are visible, the base terrain pass showing
   through everywhere else. `terr/edge` (a
-  plain vertical gradient) is **unrelated** to this pass — the EXE reads it
-  separately, via a different single-texture draw call (likely a
-  map-border/skirt decoration), out of scope for this stage. Map-edge tiles
+  plain vertical gradient) is **unrelated** to this pass — it is the
+  map-edge skirt texture (see "Map-edge skirt pass" above). Map-edge tiles
   (no neighbor) and cross-class (water/land) edges are skipped — the latter
   is handled by shore overlays. The per-direction rotation of the cell's
   (NW,NE,SE,SW) corners onto the tile's quad corners
@@ -334,7 +339,7 @@ world/camera-projected mode used for tiles/entities.
   using `SDL_SetTextureColorMod`, not an RE-blocked item.
 - ~~**3D terrain heightmap rendering**~~ **Resolved** — per-vertex height
   displacement (`~45.25*zoom` px/world-unit), 8-neighbor slope-based diffuse
-  shading, and no skirt/edge-cliff pass. See "Terrain rendering" above for
+  shading, and a map-edge skirt pass. See "Terrain rendering" above for
   the implemented clone model, including the per-tile texture-page selection
   and the edge-blend/shore-overlay passes (`terrain-blending-plan.md` Stages
   A-C/E). The original's `uv = (col/8, row/16)` continuous shared-atlas

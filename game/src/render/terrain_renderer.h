@@ -62,6 +62,11 @@ public:
     /// differently-textured neighboring tiles.
     bool terrain_blending_enabled = false;
 
+    /// Map-edge skirts: vertical quads that drop from the terrain mesh edge
+    /// down to sea level, giving mountains a visible cross-section.  Uses
+    /// the `terrain.edge` gradient texture extracted from `terr/edge`.
+    bool terrain_skirts_enabled = true;
+
 private:
     /// Returns `region_->texture_index_at(tx, ty)`
     int texture_index_at(int tx, int ty) const;
@@ -76,6 +81,9 @@ private:
     /// reusing `corners`' screen positions/colors (only UVs differ from the
     /// base pass).
     void render_shore_overlays(int tx, int ty, const SDL_Vertex corners[4]) const;
+
+    /// Draws the map-edge skirt (south and east edges of the map diamond).
+    void render_skirts(const Camera& camera) const;
 
     SDL_Renderer* renderer_ = nullptr;
     const world::Region* region_ = nullptr;
@@ -93,6 +101,10 @@ private:
     /// Shore-overlay atlases (Stage C.1): `[0]` = `terrain.coa0`, `[1]` =
     /// `terrain.coa1`, both full 256x256 native-resolution textures.
     std::array<Texture, 2> shore_atlas_textures_;
+
+    /// Map-edge skirt texture (`terrain.edge`): a 256x256 vertical gradient
+    /// (dark at top, earthy brown at bottom) used for the cliff-face quads.
+    Texture edge_texture_;
 
     /// Per-vertex terrain mesh data, built at construction. Both are
     /// `(width+1) * (height+1)` grids, row-major, indexed

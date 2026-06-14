@@ -22,6 +22,25 @@ constexpr const char* kTerrainTexturesTablePath = "tables/terrain_textures.json"
 /// Shore-overlay atlas sprite ids
 constexpr const char* kShoreAtlasSpriteIds[2] = {"terrain.coa0", "terrain.coa1"};
 
+/// Map-edge skirt texture sprite id
+constexpr const char* kEdgeSpriteId = "terrain.edge";
+
+/// Extra alti units the skirt extends below sea level, so even flat water
+/// edges get a visible cliff face.
+constexpr float kSkirtExtension = 16.0f;
+
+/// Skirt vertex color attenuation: cliff faces are less directly lit than
+/// the terrain surface. The texture gradient provides most of the shading;
+/// these factors add a slight additional dim so the skirt doesn't pop
+/// against the terrain edge it's attached to.
+constexpr float kSkirtTopShade = 0.80f;
+constexpr float kSkirtBottomShade = 0.55f;
+
+/// Skirt UV tiling: the edge texture repeats every `kSkirtUPeriod` edge
+/// segments along the edge (U axis), matching the terrain base pass's
+/// 8-tile U period. V uses the same world-pixel scale for square texels.
+constexpr float kSkirtUPeriod = 8.0f;
+
 /// Two-triangle quad winding shared by every terrain pass (base, edge-blend, shore overlay): 
 ///                             NW-NE-SE, NW-SE-SW.
 constexpr int kQuadIndices[6] = {0, 1, 2, 0, 2, 3};
@@ -248,6 +267,13 @@ void TerrainRenderer::load_textures(const std::filesystem::path& game_data_dir,
             tran_atlas_texture_ = Texture::load(renderer_, *path);
         }
     }
+
+    if (const std::optional<std::filesystem::path> path = find_sprite_file(kEdgeSpriteId)) {
+        edge_texture_ = Texture::load(renderer_, *path);
+        if (edge_texture_.valid()) {
+            SDL_SetTextureBlendMode(edge_texture_.handle(), SDL_BLENDMODE_BLEND);
+        }
+    }
 }
 
 int TerrainRenderer::texture_index_at(int tx, int ty) const {
@@ -272,8 +298,9 @@ void TerrainRenderer::render(const Camera& camera) const {
     // Render the terrain as a per-vertex height-displaced, slope-shaded mesh
     // (B15 Rounds 31-37): each tile is a quad whose 4 corners are shared
     // vertices from `terrain_vertex_height_`/`terrain_vertex_color_`, so
-    // adjacent tiles' edges always coincide (smooth slopes, no skirt pass
-    // needed -- steep height differences just become steep quads).
+    // adjacent tiles' edges always coincide (smooth slopes -- steep height
+    // differences between interior tiles just become steep quads; the
+    // map-edge skirt is a separate pass rendered before this loop).
     //
     // UV mapping: the original's continuous `uv = (col/8, row/16)` scheme
     // (B15 Round 34, terrain-blending-plan.md Stage A.0) -- each texture page
@@ -292,6 +319,10 @@ void TerrainRenderer::render(const Camera& camera) const {
     static constexpr int kCornerRow[4] = {0, 0, 1, 1};
     static constexpr float kUPeriod = 8.0f;
     static constexpr float kVPeriod = 16.0f;
+
+    if (terrain_skirts_enabled) {
+        render_skirts(camera);
+    }
 
     for (int ty = 0; ty < height; ++ty) {
         for (int tx = 0; tx < width; ++tx) {
@@ -447,6 +478,102 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
         if (dl != 15) {
             draw_overlay(shore_atlas_textures_[0], kShoreDlToShape[dl]);
         }
+    }
+}
+
+void TerrainRenderer::render_skirts(const Camera& camera) const {
+    const int width = region_->width();
+    const int height = region_->height();
+    const int vw = width + 1;
+    const float sea_height = static_cast<float>(region_->sea_level());
+    const float bottom_height = std::max(0.0f, sea_height - kSkirtExtension);
+
+    SDL_Texture* tex = (terrain_textures_enabled && edge_texture_.valid())
+                           ? edge_texture_.handle()
+                           : nullptr;
+
+    // World-pixel diagonal of one isometric edge segment (same for south
+    // and east edges): sqrt((W/2)^2 + (H/2)^2).
+    const float seg_len = std::sqrt(kTileWidth * kTileWidth / 4.0f +
+                                    kTileHeight * kTileHeight / 4.0f);
+
+    // V scale: alti units -> UV, matched to U's world-pixel scale so the
+    // texture maps with square texels (no distortion).
+    const float v_per_alti = kPixelsPerAltiUnit / (kSkirtUPeriod * seg_len);
+
+    auto dim_color = [](SDL_Color c, float f) -> SDL_Color {
+        return {static_cast<Uint8>(c.r * f), static_cast<Uint8>(c.g * f),
+                static_cast<Uint8>(c.b * f), c.a};
+    };
+
+    // Emit one skirt quad between two adjacent edge vertices.
+    // `idx` is the edge-parallel index (col for south, row for east).
+    auto emit_quad = [&](int col0, int row0, int col1, int row1, int idx) {
+        const auto vidx0 = static_cast<std::size_t>(row0) * vw + col0;
+        const auto vidx1 = static_cast<std::size_t>(row1) * vw + col1;
+
+        const float h0 = terrain_vertex_height_[vidx0];
+        const float h1 = terrain_vertex_height_[vidx1];
+
+        if (h0 <= bottom_height && h1 <= bottom_height) {
+            return;
+        }
+
+        // Top vertices: terrain surface
+        Vec2 wp0 = tile_to_world(static_cast<float>(col0), static_cast<float>(row0));
+        wp0.y -= h0 * kPixelsPerAltiUnit;
+
+        Vec2 wp1 = tile_to_world(static_cast<float>(col1), static_cast<float>(row1));
+        wp1.y -= h1 * kPixelsPerAltiUnit;
+
+        // Bottom vertices: below sea level by kSkirtExtension
+        Vec2 bwp0 = tile_to_world(static_cast<float>(col0), static_cast<float>(row0));
+        bwp0.y -= bottom_height * kPixelsPerAltiUnit;
+
+        Vec2 bwp1 = tile_to_world(static_cast<float>(col1), static_cast<float>(row1));
+        bwp1.y -= bottom_height * kPixelsPerAltiUnit;
+
+        const Vec2 sp0 = camera.world_to_screen(wp0);
+        const Vec2 sp1 = camera.world_to_screen(wp1);
+        const Vec2 bsp0 = camera.world_to_screen(bwp0);
+        const Vec2 bsp1 = camera.world_to_screen(bwp1);
+
+        const SDL_Color tc0 = dim_color(terrain_vertex_color_[vidx0], kSkirtTopShade);
+        const SDL_Color tc1 = dim_color(terrain_vertex_color_[vidx1], kSkirtTopShade);
+        const SDL_Color bc0 = dim_color(terrain_vertex_color_[vidx0], kSkirtBottomShade);
+        const SDL_Color bc1 = dim_color(terrain_vertex_color_[vidx1], kSkirtBottomShade);
+
+        // U: fmod-based tiling along the edge, same period as the terrain
+        // base pass, so each segment advances 1/kSkirtUPeriod in U space.
+        const float u0 = std::fmod(static_cast<float>(idx), kSkirtUPeriod) / kSkirtUPeriod;
+        const float u1 = u0 + 1.0f / kSkirtUPeriod;
+
+        // V: proportional to height at the same world-pixel scale as U
+        // (square texels). V=0 (top of texture, dark) at skirt bottom,
+        // V>0 (toward bottom of texture, brown) at terrain surface.
+        // Clamped to [0,1] to avoid wrap-seam artifacts on very tall skirts.
+        const float v_top0 = std::min(1.0f, (h0 - bottom_height) * v_per_alti);
+        const float v_top1 = std::min(1.0f, (h1 - bottom_height) * v_per_alti);
+
+        SDL_Vertex verts[4] = {
+            {{sp0.x, sp0.y}, tc0, {u0, v_top0}},
+            {{sp1.x, sp1.y}, tc1, {u1, v_top1}},
+            {{bsp1.x, bsp1.y}, bc1, {u1, 0.0f}},
+            {{bsp0.x, bsp0.y}, bc0, {u0, 0.0f}},
+        };
+        SDL_RenderGeometry(renderer_, tex, verts, 4, kQuadIndices, 6);
+    };
+
+    // South edge: row = height, col varies. Faces toward the camera in
+    // isometric view (the bottom-left diagonal of the map diamond).
+    for (int col = 0; col < width; ++col) {
+        emit_quad(col, height, col + 1, height, col);
+    }
+
+    // East edge: col = width, row varies. Faces toward the camera
+    // (the bottom-right diagonal of the map diamond).
+    for (int row = 0; row < height; ++row) {
+        emit_quad(width, row, width, row + 1, row);
     }
 }
 
