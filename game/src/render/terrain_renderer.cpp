@@ -206,38 +206,15 @@ TerrainRenderer::TerrainRenderer(SDL_Renderer* renderer, const world::Region& re
         return static_cast<float>(region_->height_at(tx, ty));
     };
 
-    // Each grid vertex (col, row) is shared by up to 4 tiles
-    // ((col-1,row-1), (col,row-1), (col-1,row), (col,row)).  Averaging
-    // their heights gives smooth slope shading across tile boundaries.
-    //
-    // Water constraint: if ANY of the 4 tiles is water, the vertex is
-    // pinned to sea_level so that water tiles render flat and adjacent land
-    // tiles' edges meet them seamlessly (no seam at the shared vertex).
-    const float sea = static_cast<float>(region_->sea_level());
-    auto is_water_tile = [&](int tx, int ty) -> bool {
-        tx = std::clamp(tx, 0, width - 1);
-        ty = std::clamp(ty, 0, height - 1);
-        const world::TerrainType t = region_->terrain_at(tx, ty);
-        return t == world::TerrainType::DeepWater || t == world::TerrainType::ShallowWater;
-    };
-
+    // Per the original game's EXE (virtual_252 via bilinear sampler
+    // fcn.00463420): each vertex at integer grid position gets its height
+    // from the single tile at that coordinate — no 4-tile averaging.
+    // Smooth visual appearance comes from slope-based vertex shading
+    // (8-neighbor normals), not height smoothing.
     terrain_vertex_height_.assign(static_cast<std::size_t>(vw * vh), 0.0f);
     for (int row = 0; row < vh; ++row) {
         for (int col = 0; col < vw; ++col) {
-            const bool any_water =
-                is_water_tile(col - 1, row - 1) || is_water_tile(col, row - 1) ||
-                is_water_tile(col - 1, row)     || is_water_tile(col, row);
-            if (any_water) {
-                terrain_vertex_height_[static_cast<std::size_t>(row * vw + col)] = sea;
-            } else {
-                float sum = 0.0f;
-                for (int dy = -1; dy <= 0; ++dy) {
-                    for (int dx = -1; dx <= 0; ++dx) {
-                        sum += tile_height(col + dx, row + dy);
-                    }
-                }
-                terrain_vertex_height_[static_cast<std::size_t>(row * vw + col)] = sum / 4.0f;
-            }
+            terrain_vertex_height_[static_cast<std::size_t>(row * vw + col)] = tile_height(col, row);
         }
     }
 
@@ -393,16 +370,22 @@ void TerrainRenderer::render(const Camera& camera) const {
     // differences between interior tiles just become steep quads; the
     // map-edge skirt is a separate pass rendered before this loop).
     //
-    // UV mapping: the original's continuous `uv = (col/8, row/16)` scheme
-    // (B15 Round 34, terrain-blending-plan.md Stage A.0) -- each texture page
-    // is a 256x256 image that tiles seamlessly across an 8x16-tile region of
-    // the map (32x16px per tile, 2x-magnified onto the 64x32 screen diamond).
-    // UV origin is `fmod(tx,8)/8` / `fmod(ty,16)/16` per *tile*, with each
-    // corner adding a fixed 1/8 or 1/16 step (see below) -- this avoids
-    // SDL2's lack of a wrap-mode API (the source textures are seamlessly
-    // tileable, so a [0,1] UV span per tile is equivalent to true wrapping).
-    // Per-vertex `fmod`'d UVs would wrap to 0 on the "+1" corners at every
-    // period boundary, stretching the whole texture across that tile.
+    // UV mapping: screen-axis-aligned "diamond" UV, where U varies along the
+    // screen-horizontal axis (tx-ty) and V along the screen-depth axis (tx+ty).
+    // This matches the orientation of the coast-sprite water art: constant-V
+    // lines run horizontally on screen, just as the shore-overlay atlas cells do.
+    //
+    // Per-corner offsets (du, dv) relative to the tile's NW-corner base:
+    //   NW (dc=0,dr=0): du=0,  dv=0
+    //   NE (dc=1,dr=0): du=+1, dv=+1
+    //   SE (dc=1,dr=1): du=0,  dv=+2
+    //   SW (dc=0,dr=1): du=-1, dv=+1
+    // i.e. du = (dc-dr)/kU, dv = (dc+dr)/kV.
+    //
+    // The SW corner's u = u_nw - 1/kU can be slightly negative and the SE
+    // corner's v = v_nw + 2/kV can slightly exceed 1; both require the GPU's
+    // default GL_REPEAT wrap mode, which is the OpenGL default and is active
+    // for SDL_RenderGeometry since SDL2's GL renderer does not override it.
     //
     // Corner order is fixed as NW, NE, SE, SW for every pass below (base,
     // Stage C shore overlays).
@@ -419,11 +402,12 @@ void TerrainRenderer::render(const Camera& camera) const {
         for (int tx = 0; tx < width; ++tx) {
             const int own_index = texture_index_at(tx, ty);
 
-            // UV origin for this *tile* (not per-vertex): each corner adds a
-            // fixed 1/period step from here, so a single quad always spans
-            // exactly one texture cell.
-            const float u0 = std::fmod(static_cast<float>(tx), kUPeriod) / kUPeriod;
-            const float v0 = std::fmod(static_cast<float>(ty), kVPeriod) / kVPeriod;
+            // UV base for this tile's NW corner (tx, ty) in screen-axis-aligned
+            // diamond UV space: u = (tx-ty)/kU, v = (tx+ty)/kV.
+            // Positive fmod keeps the base in [0,1); per-corner offsets then
+            // push NE/SE slightly above or SW slightly below that range.
+            const float u_nw = std::fmod(static_cast<float>(tx - ty) + kUPeriod * 1000.0f, kUPeriod) / kUPeriod;
+            const float v_nw = std::fmod(static_cast<float>(tx + ty) + kVPeriod * 1000.0f, kVPeriod) / kVPeriod;
 
             // 5-vertex fan: verts[0] = tile center, verts[1..4] = NW/NE/SE/SW
             // corners.  Matches the original's D3DPT_TRIANGLEFAN geometry
