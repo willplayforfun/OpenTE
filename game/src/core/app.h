@@ -57,7 +57,7 @@ private:
     std::optional<world::World> world_;
     std::optional<render::TerrainRenderer> terrain_renderer_;
     render::Camera camera_;
-    render::Texture hq_sprite_;
+    AnchoredSprite hq_sprite_;
 
     /// Ground-decoration sprites, keyed by `data::SpriteEntry::id`
     /// (e.g. "flor.chin.3").

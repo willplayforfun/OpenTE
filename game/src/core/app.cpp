@@ -84,7 +84,9 @@ bool App::init(const std::filesystem::path& executable_path) {
 
     for (const data::SpriteEntry& sprite : registry_->manifest().sprites) {
         if (sprite.id == kHqSpriteId) {
-            hq_sprite_ = render::Texture::load(renderer_, *game_data_dir / sprite.file);
+            hq_sprite_.texture = render::Texture::load(renderer_, *game_data_dir / sprite.file);
+            hq_sprite_.anchor_x = static_cast<float>(sprite.anchor_x);
+            hq_sprite_.anchor_y = static_cast<float>(sprite.anchor_y);
             continue;
         }
 
@@ -256,7 +258,7 @@ void App::render_decorations() {
 }
 
 void App::render_buildings() {
-    if (!hq_sprite_.valid()) {
+    if (!hq_sprite_.texture.valid()) {
         return;
     }
 
@@ -266,12 +268,11 @@ void App::render_buildings() {
         world_pos.y -= terrain_renderer_->sample_height(hq.x, hq.y) * render::kPixelsPerAltiUnit;
         const render::Vec2 screen_pos = camera_.world_to_screen(world_pos);
 
-        // Placeholder anchor: bottom-center of the sprite sits on the tile
-        // point. Real per-sprite anchors aren't extracted yet (Stage 2+).
-        const float w = hq_sprite_.width() * camera_.zoom;
-        const float h = hq_sprite_.height() * camera_.zoom;
-        const SDL_FRect dest{screen_pos.x - w / 2.0f, screen_pos.y - h, w, h};
-        SDL_RenderCopyF(renderer_, hq_sprite_.handle(), nullptr, &dest);
+        const float w = hq_sprite_.texture.width() * camera_.zoom;
+        const float h = hq_sprite_.texture.height() * camera_.zoom;
+        const SDL_FRect dest{screen_pos.x + hq_sprite_.anchor_x * camera_.zoom,
+                              screen_pos.y + hq_sprite_.anchor_y * camera_.zoom, w, h};
+        SDL_RenderCopyF(renderer_, hq_sprite_.texture.handle(), nullptr, &dest);
     }
 }
 
@@ -279,11 +280,10 @@ void App::render_dev_gui() {
     ImGui::Begin("Dev Tools", &show_dev_gui_);
     if (terrain_renderer_) {
         if (ImGui::CollapsingHeader("Terrain", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Checkbox("Terrain textures", &terrain_renderer_->terrain_textures_enabled);
             ImGui::Checkbox("Shore overlays", &terrain_renderer_->shore_overlays_enabled);
             ImGui::Checkbox("Slope shading", &terrain_renderer_->slope_shading_enabled);
             ImGui::Checkbox("Terrain blending", &terrain_renderer_->terrain_blending_enabled);
-            ImGui::Checkbox("Terrain skirts", &terrain_renderer_->terrain_skirts_enabled);
+            ImGui::Checkbox("Debug labels", &terrain_renderer_->terrain_debug_labels_enabled);
         }
     }
     ImGui::End();

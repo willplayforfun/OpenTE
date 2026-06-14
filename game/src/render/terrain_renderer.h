@@ -4,6 +4,7 @@
 // for a single `world::Region`. See OpenTE/spec/rendering.md "Terrain".
 
 #include <SDL.h>
+#include <imgui.h>
 
 #include <array>
 #include <filesystem>
@@ -46,12 +47,7 @@ public:
     float sample_height(double x, double y) const;
 
     // Terrain-rendering debug toggles, mirroring the original's `TMapView`
-    // `+0x249`/`+0x24b` options (terrain-blending-plan.md Stages
-    // C.4/E). Not exposed in UI yet -- code-level only.
-
-    /// "Terrain textures" (`+0x249`, Stage E): when false, terrain is drawn
-    /// as flat-shaded (untextured) slope-shaded quads.
-    bool terrain_textures_enabled = true;
+    // `+0x249`/`+0x24b` options (terrain-blending-plan.md Stages C.4/E).
 
     /// "Beaches": when false, skip the shore-overlay passes at water/land boundaries.
     bool shore_overlays_enabled = true;
@@ -66,10 +62,8 @@ public:
     /// differently-textured neighboring tiles.
     bool terrain_blending_enabled = true;
 
-    /// Map-edge skirts: vertical quads that drop from the terrain mesh edge
-    /// down to sea level, giving mountains a visible cross-section.  Uses
-    /// the `terrain.edge` gradient texture extracted from `terr/edge`.
-    bool terrain_skirts_enabled = true;
+    /// Draw the palette-field 4cc code over each tile's center.
+    bool terrain_debug_labels_enabled = false;
 
 private:
     /// Returns `region_->texture_index_at(tx, ty)`

@@ -28,6 +28,13 @@ constexpr const char* kEdgeSpriteId = "terrain.edge";
 /// Starfield background texture sprite id
 constexpr const char* kHiddSpriteId = "terrain.hidd";
 
+/// Palette-field 4cc labels for texture indices 0-13 (generic names from the
+/// original `terr/sets` palette structure, not culture-specific resolved tags).
+constexpr const char* kTerrainIndexLabels[14] = {
+    "",     "deep", "seas", "alps", "bld0", "bld1", "bld2",
+    "hill", "mntn", "undr", "soil", "?",    "dsr0", "dsr1",
+};
+
 /// Extra alti units the skirt extends below sea level, so even flat water
 /// edges get a visible cliff face.
 constexpr float kSkirtExtension = 16.0f;
@@ -118,11 +125,18 @@ constexpr Uint8 kShoreLUT0[256] = {
 /// water-class) -> `dl` index, keyed by `flags - 1` (`flags == 0` means no
 /// corner is water, so overlay2 is skipped before indexing). `15` = no
 /// overlay2 (LUT85).
+/// All 85 entries (`0x42b5a0`); 17 per row.  The non-`15` entries land at
+/// `flags-1` for every valid `flags` (a subset-sum of {1,4,16,64}), i.e.
+/// indices {0,3,4,15,16,19,20,63,64,67,68,79,80,83,84} -- the second group
+/// (>=63, the combinations involving the 0x40/SW-corner flag) MUST stay at
+/// those exact indices.  A previous transcription dropped two `15`s from the
+/// middle run, shifting the whole tail left by 2 (and zero-filling 83/84),
+/// which mis-selected overlay2 cells for SW-corner concave configs.
 constexpr Uint8 kShoreLUT85[85] = {
-    0,  15, 15, 1,  2,  15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 3,  4,
-    15, 15, 5,  6,  15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 7,  8,  15, 15, 9,
+     0, 15, 15,  1,  2, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,  3,  4,
+    15, 15,  5,  6, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,  7,  8, 15, 15,  9,
     10, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 11, 12, 15, 15, 13, 14,
 };
 
@@ -364,9 +378,7 @@ void TerrainRenderer::render(const Camera& camera) const {
 
     render_background(camera);
 
-    if (terrain_skirts_enabled) {
-        render_skirts(camera);
-    }
+    render_skirts(camera);
 
     for (int ty = 0; ty < height; ++ty) {
         for (int tx = 0; tx < width; ++tx) {
@@ -401,12 +413,23 @@ void TerrainRenderer::render(const Camera& camera) const {
                                            v0 + static_cast<float>(kCornerRow[c]) / kVPeriod};
             }
 
-            // Center vertex: average of the 4 corners.
-            verts[0].position = {
-                (verts[1].position.x + verts[2].position.x +
-                 verts[3].position.x + verts[4].position.x) * 0.25f,
-                (verts[1].position.y + verts[2].position.y +
-                 verts[3].position.y + verts[4].position.y) * 0.25f};
+            // Center vertex: position computed from the tile's own height.
+            // In the original, the center IS the tile's own grid vertex — its
+            // height comes directly from the heightmap (or sea_level for water),
+            // not from averaging neighbors.
+            {
+                const float center_h =
+                    (own_index <= 2)
+                        ? static_cast<float>(region_->sea_level())
+                        : static_cast<float>(region_->height_at(tx, ty));
+                const float center_h_offset = center_h * kPixelsPerAltiUnit;
+                Vec2 center_world = tile_to_world(
+                    static_cast<float>(tx) + 0.5f,
+                    static_cast<float>(ty) + 0.5f);
+                center_world.y -= center_h_offset;
+                const Vec2 center_screen = camera.world_to_screen(center_world);
+                verts[0].position = {center_screen.x, center_screen.y};
+            }
             verts[0].color = {
                 static_cast<Uint8>((verts[1].color.r + verts[2].color.r +
                                     verts[3].color.r + verts[4].color.r) / 4),
@@ -424,7 +447,7 @@ void TerrainRenderer::render(const Camera& camera) const {
 
             // Base pass (Stage A.5 / E): the tile's own texture page, or flat
             // slope-shaded color if textures are disabled.
-            if (terrain_textures_enabled && terrain_page_textures_[own_index].valid()) {
+            if (terrain_page_textures_[own_index].valid()) {
                 SDL_RenderGeometry(renderer_, terrain_page_textures_[own_index].handle(), verts, 5, kFanIndices, 12);
             } else {
                 SDL_RenderGeometry(renderer_, nullptr, verts, 5, kFanIndices, 12);
@@ -432,13 +455,26 @@ void TerrainRenderer::render(const Camera& camera) const {
 
             // Stage B: edge-blend passes between same-class,
             // differently-textured neighboring tiles.
-            if (terrain_blending_enabled && terrain_textures_enabled) {
+            if (terrain_blending_enabled) {
                 render_edge_blends(tx, ty, verts + 1);
             }
 
             // Stage C: shore-overlay passes at water/land boundaries.
-            if (shore_overlays_enabled && terrain_textures_enabled) {
+            if (shore_overlays_enabled) {
                 render_shore_overlays(tx, ty, verts + 1);
+            }
+
+            if (terrain_debug_labels_enabled && own_index >= 0 && own_index < 14) {
+                const char* label = kTerrainIndexLabels[own_index];
+                if (label[0] != '\0') {
+                    const ImVec2 text_size = ImGui::CalcTextSize(label);
+                    const ImVec2 text_pos(verts[0].position.x - text_size.x * 0.5f,
+                                          verts[0].position.y - text_size.y * 0.5f);
+                    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+                    dl->AddRectFilled(text_pos, ImVec2(text_pos.x + text_size.x, text_pos.y + text_size.y),
+                                      IM_COL32(0, 0, 0, 128));
+                    dl->AddText(text_pos, IM_COL32(255, 255, 0, 255), label);
+                }
             }
         }
     }
@@ -542,18 +578,28 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
         SDL_RenderGeometry(renderer_, atlas.handle(), fan, 5, kFanIndices, 12);
     };
 
-    // Shore overlays are only drawn on land tiles (texture index > 2).
-    // Water types 0/1/2 all get skipped — the EXE gates via [ebx+0x24b].
-    if (texture_index_at(tx, ty) <= 2) {
+    // Shore overlays are only drawn on land tiles.  The EXE gates via
+    // `[ebx+0x24b]` (beaches toggle) AND `0x463b60` which returns
+    // `(raw_mapp_terr >> 6) & 1` — i.e. bit 6 of the raw terrain byte.
+    // In the extractor's band mapping, raw >= 64 (bit 6 set) maps to
+    // TerrainType::Mountains or higher, so the equivalent check is:
+    if (region_->terrain_at(tx, ty) < world::TerrainType::Mountains) {
         return;
     }
 
     // Build the 8-direction shore mask matching the EXE's convention:
     // start at 0xFF, CLEAR bits where the neighbor's terrain type == 2
     // (shore water).  bit=1 → neighbor is NOT shore-water.
+    // OOB neighbors use type 0 (not water), matching the EXE's BSS default
+    // at VA 0x6470b0 — the bit stays SET (land).
+    const int w = region_->width();
+    const int h = region_->height();
     int mask = 0xFF;
     for (int dir = 0; dir < 8; ++dir) {
-        if (texture_index_at(tx + kDirDx[dir], ty + kDirDy[dir]) == 2) {
+        const int nx = tx + kDirDx[dir];
+        const int ny = ty + kDirDy[dir];
+        if (nx >= 0 && nx < w && ny >= 0 && ny < h &&
+            texture_index_at(nx, ny) == 2) {
             mask ^= (1 << dir);
         }
     }
@@ -603,9 +649,7 @@ void TerrainRenderer::render_skirts(const Camera& camera) const {
     const float sea_height = static_cast<float>(region_->sea_level());
     const float bottom_height = std::max(0.0f, sea_height - kSkirtExtension);
 
-    SDL_Texture* tex = (terrain_textures_enabled && edge_texture_.valid())
-                           ? edge_texture_.handle()
-                           : nullptr;
+    SDL_Texture* tex = edge_texture_.valid() ? edge_texture_.handle() : nullptr;
 
     // World-pixel diagonal of one isometric edge segment (same for south
     // and east edges): sqrt((W/2)^2 + (H/2)^2).
@@ -697,7 +741,7 @@ void TerrainRenderer::render_skirts(const Camera& camera) const {
 }
 
 void TerrainRenderer::render_background(const Camera& camera) const {
-    if (!hidd_texture_.valid() || !terrain_textures_enabled) {
+    if (!hidd_texture_.valid()) {
         return;
     }
 
