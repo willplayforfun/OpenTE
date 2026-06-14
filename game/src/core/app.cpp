@@ -1,6 +1,9 @@
 #include "core/app.h"
 
 #include <SDL_image.h>
+#include <imgui.h>
+#include <imgui_impl_sdl2.h>
+#include <imgui_impl_sdlrenderer2.h>
 
 #include <iostream>
 #include <utility>
@@ -94,6 +97,14 @@ bool App::init(const std::filesystem::path& executable_path) {
         }
     }
 
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    ImGui::StyleColorsDark();
+    ImGui_ImplSDL2_InitForSDLRenderer(window_, renderer_);
+    ImGui_ImplSDLRenderer2_Init(renderer_);
+
     // Center the camera on the player's starting headquarters, if any.
     if (!world_->region().regions().empty()) {
         const world::Headquarters& hq = world_->region().regions().front().headquarters;
@@ -110,6 +121,19 @@ int App::run() {
     SDL_Event event;
     while (running_) {
         while (SDL_PollEvent(&event) != 0) {
+            ImGui_ImplSDL2_ProcessEvent(&event);
+
+            if (event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_GRAVE) {
+                show_dev_gui_ = !show_dev_gui_;
+                continue;
+            }
+
+            const ImGuiIO& io = ImGui::GetIO();
+            if (io.WantCaptureKeyboard && (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP))
+                continue;
+            if (io.WantCaptureMouse && (event.type == SDL_MOUSEWHEEL))
+                continue;
+
             handle_event(event);
         }
 
@@ -188,6 +212,10 @@ void App::update(float dt_seconds) {
 }
 
 void App::render() {
+    ImGui_ImplSDLRenderer2_NewFrame();
+    ImGui_ImplSDL2_NewFrame();
+    ImGui::NewFrame();
+
     SDL_SetRenderDrawColor(renderer_, 10, 15, 25, 255);
     SDL_RenderClear(renderer_);
 
@@ -196,6 +224,12 @@ void App::render() {
         render_decorations();
         render_buildings();
     }
+
+    if (show_dev_gui_) {
+        render_dev_gui();
+    }
+    ImGui::Render();
+    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
 
     SDL_RenderPresent(renderer_);
 }
@@ -241,7 +275,25 @@ void App::render_buildings() {
     }
 }
 
+void App::render_dev_gui() {
+    ImGui::Begin("Dev Tools", &show_dev_gui_);
+    if (terrain_renderer_) {
+        if (ImGui::CollapsingHeader("Terrain", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Checkbox("Terrain textures", &terrain_renderer_->terrain_textures_enabled);
+            ImGui::Checkbox("Shore overlays", &terrain_renderer_->shore_overlays_enabled);
+            ImGui::Checkbox("Slope shading", &terrain_renderer_->slope_shading_enabled);
+            ImGui::Checkbox("Terrain blending", &terrain_renderer_->terrain_blending_enabled);
+            ImGui::Checkbox("Terrain skirts", &terrain_renderer_->terrain_skirts_enabled);
+        }
+    }
+    ImGui::End();
+}
+
 App::~App() {
+    ImGui_ImplSDLRenderer2_Shutdown();
+    ImGui_ImplSDL2_Shutdown();
+    ImGui::DestroyContext();
+
     if (renderer_ != nullptr) {
         SDL_DestroyRenderer(renderer_);
     }

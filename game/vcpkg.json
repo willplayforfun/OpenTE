@@ -7,6 +7,16 @@
   "dependencies": [
     "sdl2",
     "sdl2-image",
-    "nlohmann-json"
+    "nlohmann-json",
+    {
+      "name": "imgui",
+      "features": ["sdl2-binding", "sdl2-renderer-binding"]
+    }
+  ],
+  "overrides": [
+    {
+      "name": "imgui",
+      "version": "1.89.9"
+    }
   ]
 }

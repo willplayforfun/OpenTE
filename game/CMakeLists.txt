@@ -19,6 +19,7 @@ endif()
 find_package(SDL2 CONFIG REQUIRED)
 find_package(SDL2_image CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
 add_executable(opente
     src/main.cpp
@@ -38,6 +39,7 @@ target_link_libraries(opente PRIVATE
     $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
     $<IF:$<TARGET_EXISTS:SDL2_image::SDL2_image>,SDL2_image::SDL2_image,SDL2_image::SDL2_image-static>
     nlohmann_json::nlohmann_json
+    imgui::imgui
 )
 
 # Place the executable directly in the build output directory (no per-config

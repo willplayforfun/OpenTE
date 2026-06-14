@@ -64,6 +64,9 @@ private:
     std::map<std::string, AnchoredSprite> decoration_sprites_;
 
     bool running_ = false;
+    bool show_dev_gui_ = false;
+
+    void render_dev_gui();
 
     // Held-key state for continuous (per-frame) camera panning.
     bool pan_left_ = false;
