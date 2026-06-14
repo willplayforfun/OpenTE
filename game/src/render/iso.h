@@ -36,26 +36,32 @@ struct Vec3 {
     float z = 0;
 };
 
-/// Lighting constants for the per-vertex slope shading pass (B15 Rounds
-/// 28/31-37: the original computes a per-vertex normal from neighboring
-/// heights and a diffuse term against a fixed light direction). The
-/// original's exact ambient/light constants weren't fully recovered (B15
-/// "still open" item 2) -- these are reasonable stand-ins that produce the
-/// same qualitative effect (flat ground evenly lit, slopes shaded by
-/// orientation). Tune here if the in-game look needs adjusting.
+/// Lighting constants for per-vertex slope shading, EXE-confirmed from
+/// TMapView ctor @ 0x467500 and virtual_252 @ 0x468b50.
 
-/// "Spacing" term for the per-vertex normal's Z component -- larger values
-/// make slopes look gentler (less dramatic shading contrast) for the same
-/// height difference.
-constexpr float kSlopeNormalZ = 2.0f;
+/// Height-difference multiplier for the 8 direction vectors used in the
+/// cross-product normal computation: each neighbor's direction vector is
+/// Vec3(dx, dy, (h_neighbor - h_center) * kSlopeGradientScale).
+constexpr float kSlopeGradientScale = 3.0f;  // [TMapView+0x238]  0x40400000
 
-/// Fixed light direction (already normalized), pointing down and slightly
-/// from the north-west -- an arbitrary but typical isometric "sun" angle.
-constexpr Vec3 kLightDir = {-0.3713906764f, -0.5570860146f, 0.7427813528f};
+/// Fixed light direction (normalized). Computed in the EXE from elevation
+/// = 0.85 rad and azimuth = 6.08 rad via sin/cos, then normalized.
+constexpr Vec3 kLightDir = {-0.7358256578f, -0.1516010314f, 0.6599830985f};
 
-/// Minimum brightness multiplier for faces sloping fully away from the
-/// light, so shadowed slopes stay readable rather than going to black.
-constexpr float kAmbient = 0.55f;
+/// Per-channel ambient coefficients. Shadowed faces get a warm reddish
+/// tint (higher R ambient) rather than uniform gray.
+/// Formula: byte = min(255, int(((1 - ambient) * max(0, dot) + ambient) * 2 * 255))
+constexpr float kAmbientR = 0.1369999945f;  // [TMapView+0x23c]  0x3E0C49BA
+constexpr float kAmbientG = 0.0430000015f;  // [TMapView+0x240]  0x3D3020C5
+constexpr float kAmbientB = 0.0f;           // [TMapView+0x244]  0x00000000
+
+/// The original game uses D3DTOP_MODULATE2X (value 5) for the terrain base
+/// pass, which doubles vertex color before multiplying with the texture.
+/// SDL2's SDL_RenderGeometry uses plain modulate, so we bake the 2x factor
+/// into the vertex colors.  Evidence: flat terrain produces dot≈0.66 →
+/// vertex color ~180/255 (70.6%), which requires 2x overbright to reach
+/// full brightness.  The edge-blend function (0x42acf0) uses MODULATE4X.
+constexpr float kVertexColorScale = 2.0f;
 
 struct Vec2 {
     float x = 0;

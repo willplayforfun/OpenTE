@@ -25,6 +25,9 @@ constexpr const char* kShoreAtlasSpriteIds[2] = {"terrain.coa0", "terrain.coa1"}
 /// Map-edge skirt texture sprite id
 constexpr const char* kEdgeSpriteId = "terrain.edge";
 
+/// Starfield background texture sprite id
+constexpr const char* kHiddSpriteId = "terrain.hidd";
+
 /// Extra alti units the skirt extends below sea level, so even flat water
 /// edges get a visible cliff face.
 constexpr float kSkirtExtension = 16.0f;
@@ -41,9 +44,13 @@ constexpr float kSkirtBottomShade = 0.55f;
 /// 8-tile U period. V uses the same world-pixel scale for square texels.
 constexpr float kSkirtUPeriod = 8.0f;
 
-/// Two-triangle quad winding shared by every terrain pass (base, edge-blend, shore overlay): 
-///                             NW-NE-SE, NW-SE-SW.
+/// Two-triangle quad winding for rectangular geometry (skirt pass only).
 constexpr int kQuadIndices[6] = {0, 1, 2, 0, 2, 3};
+
+/// 4-triangle fan winding for diamond terrain tiles: vertex 0 is the tile
+/// center, vertices 1-4 are the NW/NE/SE/SW corners.  Matches the original's
+/// D3DPT_TRIANGLEFAN(6 verts) geometry (center + 4 corners + closing repeat).
+constexpr int kFanIndices[12] = {0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1};
 
 /// 8-direction neighbor offsets, `world-and-maps.md` order:
 /// 0=NW 1=N 2=NE 3=E 4=SE 5=S 6=SW 7=W.
@@ -55,16 +62,11 @@ constexpr int kDirDy[8] = {-1, -1, -1, 0, 1, 1, 1, 0};
 /// a half-texel inset on each edge (B15 Round 40: `u_near = (cell*64 +
 /// 0.5)/256`, `u_far = u_near + 63/256`).  The EXE samples the full cell;
 /// a previous "half-cell" tweak was caused by confounding UV-interpolation
-/// artifacts from the missing center vertex (see kTranFanIndices).
+/// artifacts from the missing center vertex (see kFanIndices).
 constexpr float kTranCellUV = 64.0f / 256.0f;
 constexpr float kTranInsetUV = 0.5f / 256.0f;
 
-/// Stage B: 5-vertex triangle fan emulating D3DPT_TRIANGLEFAN.  Vertex 0 is
-/// the tile center (with midpoint UVs), vertices 1-4 are the NW/NE/SE/SW
-/// corners.  The EXE's 6-vertex fan (center, 4 corners, closing repeat) is
-/// equivalent to these 4 triangles:
-///   (center, NW, NE), (center, NE, SE), (center, SE, SW), (center, SW, NW).
-constexpr int kTranFanIndices[12] = {0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1};
+/// Stage B uses the same kFanIndices as the base pass (center + 4 corners).
 
 /// Stage B: the 4 edge-blend directions, in `world-and-maps.md`'s 8-direction
 /// order (1=N, 3=E, 5=S, 7=W -- the cardinal directions of `0x42acf0`'s
@@ -199,7 +201,8 @@ TerrainRenderer::TerrainRenderer(SDL_Renderer* renderer, const world::Region& re
         }
     }
 
-    // Per-vertex slope shading: TEMPORARY approximatation of the EXE's per-vertex diffuse lighting
+    // Per-vertex slope shading: 8-neighbor cross-product normal, per-channel
+    // ambient (EXE-confirmed from TMapView virtual_252 @ 0x468b50).
     auto vertex_height = [&](int col, int row) -> float {
         col = std::clamp(col, 0, vw - 1);
         row = std::clamp(row, 0, vh - 1);
@@ -209,15 +212,42 @@ TerrainRenderer::TerrainRenderer(SDL_Renderer* renderer, const world::Region& re
     terrain_vertex_color_.assign(static_cast<std::size_t>(vw) * vh, SDL_Color{255, 255, 255, 255});
     for (int row = 0; row < vh; ++row) {
         for (int col = 0; col < vw; ++col) {
-            const float dx = (vertex_height(col + 1, row) - vertex_height(col - 1, row)) * kAltiToWorldHeight;
-            const float dy = (vertex_height(col, row + 1) - vertex_height(col, row - 1)) * kAltiToWorldHeight;
-            const Vec3 normal{-dx, -dy, kSlopeNormalZ};
-            const float len = std::sqrt(normal.x * normal.x + normal.y * normal.y + normal.z * normal.z);
-            const float diffuse =
-                std::max(0.0f, (normal.x * kLightDir.x + normal.y * kLightDir.y + normal.z * kLightDir.z) / len);
-            const float brightness = kAmbient + (1.0f - kAmbient) * diffuse;
-            const auto c = static_cast<Uint8>(std::clamp(brightness, 0.0f, 1.0f) * 255.0f);
-            terrain_vertex_color_[static_cast<std::size_t>(row) * vw + col] = SDL_Color{c, c, c, 255};
+            const float hc = vertex_height(col, row);
+
+            // 8 direction vectors (kDirDx/kDirDy order: NW,N,NE,E,SE,S,SW,W).
+            Vec3 dirs[8];
+            for (int d = 0; d < 8; ++d) {
+                const float hn = vertex_height(col + kDirDx[d], row + kDirDy[d]);
+                dirs[d] = {static_cast<float>(kDirDx[d]),
+                           static_cast<float>(kDirDy[d]),
+                           (hn - hc) * kAltiToWorldHeight * kSlopeGradientScale};
+            }
+
+            // Sum of 8 cross products of adjacent direction pairs (full fan).
+            Vec3 accum{0, 0, 0};
+            for (int i = 0; i < 8; ++i) {
+                const Vec3& a = dirs[i];
+                const Vec3& b = dirs[(i + 1) & 7];
+                accum.x += a.y * b.z - a.z * b.y;
+                accum.y += a.z * b.x - a.x * b.z;
+                accum.z += a.x * b.y - a.y * b.x;
+            }
+
+            const float len = std::sqrt(accum.x * accum.x + accum.y * accum.y + accum.z * accum.z);
+            if (len < 1e-12f) {
+                terrain_vertex_color_[static_cast<std::size_t>(row) * vw + col] = SDL_Color{255, 255, 255, 255};
+                continue;
+            }
+            const float inv_len = 1.0f / len;
+            const float dot = std::max(0.0f,
+                accum.x * inv_len * kLightDir.x +
+                accum.y * inv_len * kLightDir.y +
+                accum.z * inv_len * kLightDir.z);
+
+            const auto r = static_cast<Uint8>(std::min(255.0f, ((1.0f - kAmbientR) * dot + kAmbientR) * kVertexColorScale * 255.0f));
+            const auto g = static_cast<Uint8>(std::min(255.0f, ((1.0f - kAmbientG) * dot + kAmbientG) * kVertexColorScale * 255.0f));
+            const auto b_ch = static_cast<Uint8>(std::min(255.0f, ((1.0f - kAmbientB) * dot + kAmbientB) * kVertexColorScale * 255.0f));
+            terrain_vertex_color_[static_cast<std::size_t>(row) * vw + col] = SDL_Color{r, g, b_ch, 255};
         }
     }
 }
@@ -279,6 +309,13 @@ void TerrainRenderer::load_textures(const std::filesystem::path& game_data_dir,
             SDL_SetTextureBlendMode(edge_texture_.handle(), SDL_BLENDMODE_BLEND);
         }
     }
+
+    const std::string hidd_sprite_id = j.value("hidd", std::string{});
+    if (!hidd_sprite_id.empty()) {
+        if (const std::optional<std::filesystem::path> path = find_sprite_file(hidd_sprite_id)) {
+            hidd_texture_ = Texture::load(renderer_, *path);
+        }
+    }
 }
 
 int TerrainRenderer::texture_index_at(int tx, int ty) const {
@@ -325,6 +362,8 @@ void TerrainRenderer::render(const Camera& camera) const {
     static constexpr float kUPeriod = 8.0f;
     static constexpr float kVPeriod = 16.0f;
 
+    render_background(camera);
+
     if (terrain_skirts_enabled) {
         render_skirts(camera);
     }
@@ -335,14 +374,15 @@ void TerrainRenderer::render(const Camera& camera) const {
 
             // UV origin for this *tile* (not per-vertex): each corner adds a
             // fixed 1/period step from here, so a single quad always spans
-            // exactly one texture cell. Computing fmod(col,period) per vertex
-            // instead would make the "+1" corners wrap to 0 at every period
-            // boundary (col/row a multiple of the period), stretching the
-            // whole texture across that tile.
+            // exactly one texture cell.
             const float u0 = std::fmod(static_cast<float>(tx), kUPeriod) / kUPeriod;
             const float v0 = std::fmod(static_cast<float>(ty), kVPeriod) / kVPeriod;
 
-            SDL_Vertex verts[4];
+            // 5-vertex fan: verts[0] = tile center, verts[1..4] = NW/NE/SE/SW
+            // corners.  Matches the original's D3DPT_TRIANGLEFAN geometry
+            // (center + 4 corners + closing repeat = 4 triangles through the
+            // center, avoiding the diagonal-seam artifact of a 2-triangle split).
+            SDL_Vertex verts[5];
             for (int c = 0; c < 4; ++c) {
                 const int col = tx + kCornerCol[c];
                 const int row = ty + kCornerRow[c];
@@ -353,29 +393,52 @@ void TerrainRenderer::render(const Camera& camera) const {
                 world_pos.y -= height_offset;
                 const Vec2 screen_pos = camera.world_to_screen(world_pos);
 
-                verts[c].position = {screen_pos.x, screen_pos.y};
-                verts[c].color = terrain_vertex_color_[vidx];
-                verts[c].tex_coord = {u0 + static_cast<float>(kCornerCol[c]) / kUPeriod,
-                                       v0 + static_cast<float>(kCornerRow[c]) / kVPeriod};
+                verts[1 + c].position = {screen_pos.x, screen_pos.y};
+                verts[1 + c].color = slope_shading_enabled
+                    ? terrain_vertex_color_[vidx]
+                    : SDL_Color{255, 255, 255, 255};
+                verts[1 + c].tex_coord = {u0 + static_cast<float>(kCornerCol[c]) / kUPeriod,
+                                           v0 + static_cast<float>(kCornerRow[c]) / kVPeriod};
             }
+
+            // Center vertex: average of the 4 corners.
+            verts[0].position = {
+                (verts[1].position.x + verts[2].position.x +
+                 verts[3].position.x + verts[4].position.x) * 0.25f,
+                (verts[1].position.y + verts[2].position.y +
+                 verts[3].position.y + verts[4].position.y) * 0.25f};
+            verts[0].color = {
+                static_cast<Uint8>((verts[1].color.r + verts[2].color.r +
+                                    verts[3].color.r + verts[4].color.r) / 4),
+                static_cast<Uint8>((verts[1].color.g + verts[2].color.g +
+                                    verts[3].color.g + verts[4].color.g) / 4),
+                static_cast<Uint8>((verts[1].color.b + verts[2].color.b +
+                                    verts[3].color.b + verts[4].color.b) / 4),
+                static_cast<Uint8>((verts[1].color.a + verts[2].color.a +
+                                    verts[3].color.a + verts[4].color.a) / 4)};
+            verts[0].tex_coord = {
+                (verts[1].tex_coord.x + verts[2].tex_coord.x +
+                 verts[3].tex_coord.x + verts[4].tex_coord.x) * 0.25f,
+                (verts[1].tex_coord.y + verts[2].tex_coord.y +
+                 verts[3].tex_coord.y + verts[4].tex_coord.y) * 0.25f};
 
             // Base pass (Stage A.5 / E): the tile's own texture page, or flat
             // slope-shaded color if textures are disabled.
             if (terrain_textures_enabled && terrain_page_textures_[own_index].valid()) {
-                SDL_RenderGeometry(renderer_, terrain_page_textures_[own_index].handle(), verts, 4, kQuadIndices, 6);
+                SDL_RenderGeometry(renderer_, terrain_page_textures_[own_index].handle(), verts, 5, kFanIndices, 12);
             } else {
-                SDL_RenderGeometry(renderer_, nullptr, verts, 4, kQuadIndices, 6);
+                SDL_RenderGeometry(renderer_, nullptr, verts, 5, kFanIndices, 12);
             }
 
             // Stage B: edge-blend passes between same-class,
             // differently-textured neighboring tiles.
             if (terrain_blending_enabled && terrain_textures_enabled) {
-                render_edge_blends(tx, ty, verts);
+                render_edge_blends(tx, ty, verts + 1);
             }
 
             // Stage C: shore-overlay passes at water/land boundaries.
             if (shore_overlays_enabled && terrain_textures_enabled) {
-                render_shore_overlays(tx, ty, verts);
+                render_shore_overlays(tx, ty, verts + 1);
             }
         }
     }
@@ -438,7 +501,7 @@ void TerrainRenderer::render_edge_blends(int tx, int ty, const SDL_Vertex corner
             fan[1 + j].tex_coord = {corner_u[m], corner_v[m]};
         }
         SDL_RenderGeometry(renderer_, tran_atlas_texture_.handle(),
-                           fan, 5, kTranFanIndices, 12);
+                           fan, 5, kFanIndices, 12);
     }
 }
 
@@ -461,44 +524,55 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
         const float mid_v   = shore_uv(idx1 + 2);
         const float bot_v   = shore_uv(idx1 + 3);
 
-        SDL_Vertex verts[4];
-        std::copy(corners, corners + 4, verts);
-        verts[0].tex_coord = {mid_u,   top_v};   // NW = screen top
-        verts[1].tex_coord = {right_u, mid_v};    // NE = screen right
-        verts[2].tex_coord = {mid_u,   bot_v};    // SE = screen bottom
-        verts[3].tex_coord = {left_u,  mid_v};    // SW = screen left
-        SDL_RenderGeometry(renderer_, atlas.handle(), verts, 4, kQuadIndices, 6);
+        SDL_Vertex fan[5];
+        fan[0].position = {
+            (corners[0].position.x + corners[1].position.x +
+             corners[2].position.x + corners[3].position.x) * 0.25f,
+            (corners[0].position.y + corners[1].position.y +
+             corners[2].position.y + corners[3].position.y) * 0.25f};
+        fan[0].color = corners[0].color;
+        fan[0].tex_coord = {mid_u, mid_v};
+        for (int j = 0; j < 4; ++j) {
+            fan[1 + j] = corners[j];
+        }
+        fan[1].tex_coord = {mid_u,   top_v};   // NW = screen top
+        fan[2].tex_coord = {right_u, mid_v};    // NE = screen right
+        fan[3].tex_coord = {mid_u,   bot_v};    // SE = screen bottom
+        fan[4].tex_coord = {left_u,  mid_v};    // SW = screen left
+        SDL_RenderGeometry(renderer_, atlas.handle(), fan, 5, kFanIndices, 12);
     };
 
-    // Build the 8-direction water-neighbor mask (shared by both passes).
-    int mask = 0;
+    // Shore overlays are only drawn on land tiles (texture index > 2).
+    // Water types 0/1/2 all get skipped — the EXE gates via [ebx+0x24b].
+    if (texture_index_at(tx, ty) <= 2) {
+        return;
+    }
+
+    // Build the 8-direction shore mask matching the EXE's convention:
+    // start at 0xFF, CLEAR bits where the neighbor's terrain type == 2
+    // (shore water).  bit=1 → neighbor is NOT shore-water.
+    int mask = 0xFF;
     for (int dir = 0; dir < 8; ++dir) {
-        if (texture_index_at(tx + kDirDx[dir], ty + kDirDy[dir]) <= 2) {
-            mask |= (1 << dir);
+        if (texture_index_at(tx + kDirDx[dir], ty + kDirDy[dir]) == 2) {
+            mask ^= (1 << dir);
         }
     }
     if (mask == 0xFF) {
         return;
     }
 
-    // Overlay pass 1 (C.2): 8-direction mask -> LUT0 -> cell code.
-    const Uint8 overlay1 = kShoreLUT0[mask];
-    if (overlay1 != 255) {
-        if (overlay1 <= 52) {
-            draw_overlay(shore_atlas_textures_[0], overlay1);
-        } else {
-            draw_overlay(shore_atlas_textures_[1], overlay1 - 53);
-        }
-    }
+    // EXE draw order: overlay2 (concave corners) FIRST, then overlay1 on top.
+    // 56 of 256 mask values produce both overlays; the later draw wins where
+    // they overlap, so order matters.
 
-    // Overlay pass 2 (C.3): concave-corner flags derived from the same mask.
-    // A corner flag fires when BOTH adjacent cardinal neighbors are water AND
-    // the diagonal between them is NOT water — the "inner coastline corner"
-    // that the edge-based overlay1 doesn't cover.
-    //   NW corner: (mask & 0x83) == 0x82  (W+N water, NW not)
-    //   NE corner: (mask & 0x0E) == 0x0A  (N+E water, NE not)
-    //   SE corner: (mask & 0x38) == 0x28  (E+S water, SE not)
-    //   SW corner: (mask & 0xE0) == 0xA0  (S+W water, SW not)
+    // Overlay pass 1 — concave-corner flags (C.3, drawn first in the EXE).
+    // Mask uses NOT-water bits (set=land, clear=water).  A corner flag fires
+    // when the diagonal IS water (bit clear) but both adjacent cardinals are
+    // NOT water (bits set) — a water tile poking diagonally into land.
+    //   NW corner: (mask & 0x83) == 0x82  (NW water, N+W not)
+    //   NE corner: (mask & 0x0E) == 0x0A  (NE water, N+E not)
+    //   SE corner: (mask & 0x38) == 0x28  (SE water, E+S not)
+    //   SW corner: (mask & 0xE0) == 0xA0  (SW water, S+W not)
     int flags = 0;
     if ((mask & 0x83) == 0x82) flags |= 0x01;
     if ((mask & 0x0E) == 0x0A) flags |= 0x04;
@@ -508,6 +582,16 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
         const Uint8 dl = kShoreLUT85[flags - 1];
         if (dl != 15) {
             draw_overlay(shore_atlas_textures_[0], kShoreDlToShape[dl]);
+        }
+    }
+
+    // Overlay pass 2 — directional shore edge (C.2, drawn second in the EXE).
+    const Uint8 overlay1 = kShoreLUT0[mask];
+    if (overlay1 != 255) {
+        if (overlay1 <= 52) {
+            draw_overlay(shore_atlas_textures_[0], overlay1);
+        } else {
+            draw_overlay(shore_atlas_textures_[1], overlay1 - 53);
         }
     }
 }
@@ -569,10 +653,14 @@ void TerrainRenderer::render_skirts(const Camera& camera) const {
         const Vec2 bsp0 = camera.world_to_screen(bwp0);
         const Vec2 bsp1 = camera.world_to_screen(bwp1);
 
-        const SDL_Color tc0 = dim_color(terrain_vertex_color_[vidx0], kSkirtTopShade);
-        const SDL_Color tc1 = dim_color(terrain_vertex_color_[vidx1], kSkirtTopShade);
-        const SDL_Color bc0 = dim_color(terrain_vertex_color_[vidx0], kSkirtBottomShade);
-        const SDL_Color bc1 = dim_color(terrain_vertex_color_[vidx1], kSkirtBottomShade);
+        const SDL_Color vc0 = slope_shading_enabled
+            ? terrain_vertex_color_[vidx0] : SDL_Color{255, 255, 255, 255};
+        const SDL_Color vc1 = slope_shading_enabled
+            ? terrain_vertex_color_[vidx1] : SDL_Color{255, 255, 255, 255};
+        const SDL_Color tc0 = dim_color(vc0, kSkirtTopShade);
+        const SDL_Color tc1 = dim_color(vc1, kSkirtTopShade);
+        const SDL_Color bc0 = dim_color(vc0, kSkirtBottomShade);
+        const SDL_Color bc1 = dim_color(vc1, kSkirtBottomShade);
 
         // U: fmod-based tiling along the edge, same period as the terrain
         // base pass, so each segment advances 1/kSkirtUPeriod in U space.
@@ -605,6 +693,90 @@ void TerrainRenderer::render_skirts(const Camera& camera) const {
     // (the bottom-right diagonal of the map diamond).
     for (int row = 0; row < height; ++row) {
         emit_quad(width, row, width, row + 1, row);
+    }
+}
+
+void TerrainRenderer::render_background(const Camera& camera) const {
+    if (!hidd_texture_.valid() || !terrain_textures_enabled) {
+        return;
+    }
+
+    const int map_w = region_->width();
+    const int map_h = region_->height();
+    const float sea_h = static_cast<float>(region_->sea_level()) * kPixelsPerAltiUnit;
+
+    // Compute the visible tile range from the viewport corners.
+    int vp_w = 0;
+    int vp_h = 0;
+    SDL_GetRendererOutputSize(renderer_, &vp_w, &vp_h);
+
+    const Vec2 screen_corners[4] = {{0, 0},
+                                    {static_cast<float>(vp_w), 0},
+                                    {static_cast<float>(vp_w), static_cast<float>(vp_h)},
+                                    {0, static_cast<float>(vp_h)}};
+
+    float min_tx = 1e9f, max_tx = -1e9f;
+    float min_ty = 1e9f, max_ty = -1e9f;
+    for (const Vec2& sc : screen_corners) {
+        const Vec2 world = {sc.x / camera.zoom + camera.world_pixel_offset.x,
+                            sc.y / camera.zoom + camera.world_pixel_offset.y};
+        const Vec2 tile = world_to_tile(world.x, world.y);
+        min_tx = std::min(min_tx, tile.x);
+        max_tx = std::max(max_tx, tile.x);
+        min_ty = std::min(min_ty, tile.y);
+        max_ty = std::max(max_ty, tile.y);
+    }
+
+    const int pad = 4;
+    const int t_x0 = static_cast<int>(std::floor(min_tx)) - pad;
+    const int t_y0 = static_cast<int>(std::floor(min_ty)) - pad;
+    const int t_x1 = static_cast<int>(std::ceil(max_tx)) + pad;
+    const int t_y1 = static_cast<int>(std::ceil(max_ty)) + pad;
+
+    static constexpr int kCornerCol[4] = {0, 1, 1, 0};
+    static constexpr int kCornerRow[4] = {0, 0, 1, 1};
+    static constexpr float kUPeriod = 8.0f;
+    static constexpr float kVPeriod = 16.0f;
+
+    for (int ty = t_y0; ty < t_y1; ++ty) {
+        for (int tx = t_x0; tx < t_x1; ++tx) {
+            if (tx >= 0 && tx < map_w && ty >= 0 && ty < map_h) {
+                continue;
+            }
+
+            const float u0 = static_cast<float>(((tx % 8) + 8) % 8) / kUPeriod;
+            const float v0 = static_cast<float>(((ty % 16) + 16) % 16) / kVPeriod;
+
+            SDL_Vertex verts[5];
+            for (int c = 0; c < 4; ++c) {
+                const int col = tx + kCornerCol[c];
+                const int row = ty + kCornerRow[c];
+
+                Vec2 world_pos = tile_to_world(static_cast<float>(col), static_cast<float>(row));
+                world_pos.y -= sea_h;
+                const Vec2 screen_pos = camera.world_to_screen(world_pos);
+
+                verts[1 + c].position = {screen_pos.x, screen_pos.y};
+                verts[1 + c].color = {255, 255, 255, 255};
+                verts[1 + c].tex_coord = {u0 + static_cast<float>(kCornerCol[c]) / kUPeriod,
+                                           v0 + static_cast<float>(kCornerRow[c]) / kVPeriod};
+            }
+
+            verts[0].position = {
+                (verts[1].position.x + verts[2].position.x +
+                 verts[3].position.x + verts[4].position.x) * 0.25f,
+                (verts[1].position.y + verts[2].position.y +
+                 verts[3].position.y + verts[4].position.y) * 0.25f};
+            verts[0].color = {255, 255, 255, 255};
+            verts[0].tex_coord = {
+                (verts[1].tex_coord.x + verts[2].tex_coord.x +
+                 verts[3].tex_coord.x + verts[4].tex_coord.x) * 0.25f,
+                (verts[1].tex_coord.y + verts[2].tex_coord.y +
+                 verts[3].tex_coord.y + verts[4].tex_coord.y) * 0.25f};
+
+            SDL_RenderGeometry(renderer_, hidd_texture_.handle(),
+                               verts, 5, kFanIndices, 12);
+        }
     }
 }
 

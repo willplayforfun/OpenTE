@@ -24,14 +24,19 @@ extractor (`OpenTE/tools/extractor/sprites/terrain.py`,
 | 38-39 | 1-13 texture-page index table (Round 39 corrects Round 38), `tran`-family dithered-dissolve atlases identified | `_TEXTURE_PAGE_SOURCES` table, `tran` extraction |
 | 40 | `tran` atlas IS the edge-blend source (not `terr/edge`); 4-direction neighbor loop with `0.25`-UV cells; `terr/edge` is unrelated (separate offset `+0x1c28`) | `render_edge_blends()` uses `tran` atlas |
 
-## Continuous UV — tried, reverted
+## Continuous UV — implemented
 
-Round 34's `(col/8, row/16)` UV scheme assumes a large shared atlas where
-one `[0,1]` UV span covers an 8x16-tile region. OpenTE's extracted textures
-are individual 256x256 per-page images, so continuous UV produced a broken
-render (tiny magnified sliver per tile). The base pass retains per-tile
-`[0,1]` edge-midpoint UV. If revisited, the only viable path is a pre-baked
-tiled atlas at extraction time — SDL2 has no explicit texture wrap-mode API.
+Round 34's `(col/8, row/16)` UV scheme is now active. The extracted texture
+pages are full native-resolution 256x256 seamlessly-tileable images (not
+64x32 per-tile crops — that was the earlier broken configuration). Each tile
+samples a 32x16 texel region (1/8 x 1/16 of the texture), 2x-magnified
+onto the 64x32 screen diamond. UV origin is `fmod(tx,8)/8` /
+`fmod(ty,16)/16` per tile (not per vertex) to simulate wrap mode without
+SDL2 API support.
+
+The base pass uses a 5-vertex center-based fan (matching the original's
+`D3DPT_TRIANGLEFAN` geometry) rather than a 2-triangle diagonal split,
+eliminating the diagonal-seam texture artifact on height-displaced tiles.
 
 ## Remaining open items
 

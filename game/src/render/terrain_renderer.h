@@ -53,9 +53,13 @@ public:
     /// as flat-shaded (untextured) slope-shaded quads.
     bool terrain_textures_enabled = true;
 
-    /// "Beaches" (`+0x24b`, Stage C.4): when false, skip the shore-overlay
-    /// passes at water/land boundaries.
-    bool shore_overlays_enabled = false;
+    /// "Beaches": when false, skip the shore-overlay passes at water/land boundaries.
+    bool shore_overlays_enabled = true;
+
+    /// "Slope shading" (`+0x249`, Stage E): when false, vertex colors are
+    /// forced to white (flat lighting) -- the height-displaced mesh is still
+    /// drawn, but without the per-vertex directional tint.
+    bool slope_shading_enabled = true;
 
     /// "Terrain blending" (`+0x24a`, Stage B.5): when false, skip the
     /// edge-blend (`tran` atlas) passes between same-class,
@@ -85,6 +89,12 @@ private:
     /// Draws the map-edge skirt (south and east edges of the map diamond).
     void render_skirts(const Camera& camera) const;
 
+    /// Draws `hidd` (starfield) textured tile fans for all viewport-visible
+    /// tiles outside the map bounds, matching the original EXE's
+    /// `D3DRasterizer::virtual_60` hidd path (same geometry and UV scheme as
+    /// terrain tiles, at flat sea-level height).
+    void render_background(const Camera& camera) const;
+
     SDL_Renderer* renderer_ = nullptr;
     const world::Region* region_ = nullptr;
 
@@ -105,6 +115,11 @@ private:
     /// Map-edge skirt texture (`terrain.edge`): a 256x256 vertical gradient
     /// (dark at top, earthy brown at bottom) used for the cliff-face quads.
     Texture edge_texture_;
+
+    /// Starfield background texture (`terrain.hidd`): drawn on out-of-bounds
+    /// tile geometry behind the terrain (EXE-confirmed: `D3DRasterizer::
+    /// virtual_60 @ 0x42acf0`, `[rasterizer+4]` flag path).
+    Texture hidd_texture_;
 
     /// Per-vertex terrain mesh data, built at construction. Both are
     /// `(width+1) * (height+1)` grids, row-major, indexed

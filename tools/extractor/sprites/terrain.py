@@ -82,6 +82,9 @@ _TEXTURE_PAGE_SOURCES: dict[int, str] = {
 _EDGE_TEXTURE_TAG = "edge"
 _EDGE_SPRITE_ID = "terrain.edge"
 
+_HIDD_TEXTURE_TAG = "hidd"
+_HIDD_SPRITE_ID = "terrain.hidd"
+
 # Edge-blend atlas (Stage B, B15 Round 40): a 4x4-cell dithered-dissolve
 # atlas, one per culture palette -- "trch" is `terr/sets/16`'s ("chi1")
 # `tran` field (`data_catalog_terr_sets.txt`).
@@ -168,6 +171,17 @@ def extract_terrain_textures(m_ui_data: bytes, m_ui_root: DirNode,
             entries.append(SpriteEntry(id=_EDGE_SPRITE_ID, file=str(relative_path).replace("\\", "/"),
                                          width=sprite.width, height=sprite.height))
 
+    hidd_sprite_id = ""
+    hidd_leaf = find_leaf(terr_root, [_HIDD_TEXTURE_TAG])
+    if hidd_leaf is not None:
+        sprite = decode_sprite(m_ui_data, hidd_leaf.abs_off, hidd_leaf.size)
+        if sprite is not None:
+            relative_path = Path("sprites") / "terrain" / f"{_HIDD_SPRITE_ID}.png"
+            write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, sprite.rgba)
+            entries.append(SpriteEntry(id=_HIDD_SPRITE_ID, file=str(relative_path).replace("\\", "/"),
+                                         width=sprite.width, height=sprite.height))
+            hidd_sprite_id = _HIDD_SPRITE_ID
+
     tran_sprite_id = ""
     tran_leaf = find_leaf(terr_root, [_TRAN_TEXTURE_TAG])
     if tran_leaf is not None:
@@ -180,6 +194,7 @@ def extract_terrain_textures(m_ui_data: bytes, m_ui_root: DirNode,
                                          width=sprite.width, height=sprite.height))
             tran_sprite_id = _TRAN_SPRITE_ID
 
-    write_json(output_dir / _TERRAIN_TEXTURES_TABLE_PATH, {"pages": page_sprite_ids, "tran": tran_sprite_id})
+    write_json(output_dir / _TERRAIN_TEXTURES_TABLE_PATH,
+                {"pages": page_sprite_ids, "tran": tran_sprite_id, "hidd": hidd_sprite_id})
 
     return entries

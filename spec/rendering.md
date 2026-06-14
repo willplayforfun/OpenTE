@@ -77,10 +77,13 @@ analysis):
   constant is defined in zoom-independent "world pixel space"; `Camera::
   world_to_screen`'s uniform `(world - offset) * zoom` then applies zoom
   correctly without any special-casing.
-- **Per-tile quad**: each tile is drawn as a single textured quad (two
-  triangles) whose 4 corners are the shared vertices described above, drawn
-  via `SDL_RenderGeometry` (requires SDL >= 2.0.18; available in this
-  project's vcpkg-pinned SDL2 2.32).
+- **Per-tile fan**: each tile is drawn as a 4-triangle fan from a center
+  vertex through the 4 shared corner vertices, matching the original's
+  `D3DPT_TRIANGLEFAN(6 verts)` geometry. The center vertex (position, UV,
+  color) is the average of the 4 corners. Drawn via `SDL_RenderGeometry`
+  (requires SDL >= 2.0.18; available in this project's vcpkg-pinned SDL2
+  2.32). The fan avoids the diagonal-seam texture artifact that a 2-triangle
+  quad split produces on height-displaced non-planar tiles.
 - **Per-vertex slope shading**: each vertex gets an `SDL_Color` tint computed
   from a central-difference normal (using its 4 neighboring vertices'
   heights) dotted with a fixed light direction, blended between an ambient
@@ -89,22 +92,16 @@ analysis):
   tile texture, approximating the original's per-vertex diffuse lighting.
   The original's exact light direction/ambient constants weren't recovered;
   the clone's values are reasonable stand-ins and can be tuned freely.
-- **UV mapping**: each tile's quad maps its own texture, a square with the
-  tile's diamond inscribed touching the texture's **edge midpoints** (the
-  same convention the old rect-blit relied on). The quad's 4 tile-grid-corner
-  vertices (the diamond's tips) map to those edge midpoints: NW=(0.5,0),
-  NE=(1,0.5), SE=(0.5,1), SW=(0,0.5) — the texture's own corners (its
-  diamond's transparent margins) are unused. The texture sampled for a given
-  tile is its **texture page** (see [world-and-maps.md](world-and-maps.md)'s
+- **UV mapping**: the original's continuous `uv = (col/8, row/16)` scheme
+  (B15 Round 34). Each texture page is a 256x256 seamlessly-tileable image;
+  the UV formula tiles it across an 8x16-tile region (32x16 texels per tile,
+  2x-magnified onto the 64x32 screen diamond). UV origin is computed per-tile
+  as `fmod(tx,8)/8` / `fmod(ty,16)/16`, with each corner adding a fixed
+  `1/8` or `1/16` step and the center vertex at the midpoint — this avoids
+  SDL2's lack of a wrap-mode API. The texture sampled for a given tile is its
+  **texture page** (see [world-and-maps.md](world-and-maps.md)'s
   `texture_index` field and `tables/terrain_textures.json`'s 13-entry `pages`
-  array), looked up via `Region::texture_index_at(tx, ty)` — this replaces
-  the earlier "one texture per `TerrainType`" simplification with the
-  original's 13-slot per-tile texture-page selection (Stage A). The
-  original's continuous `uv = (col/8, row/16)` shared-atlas addressing
-  (Stage A.0) was tried and reverted — our extracted texture pages are single
-  64x32 per-tile images, not a large shared atlas, so map-spanning UVs just
-  sample tiny, heavily-magnified slivers of each page (see Stage A.0's
-  updated notes in `terrain-blending-plan.md`).
+  array), looked up via `Region::texture_index_at(tx, ty)`.
 - **Map-edge skirt pass**: the south and east edges of the map diamond
   (the two edges facing the camera) get vertical "skirt" quads that drop
   from each edge vertex's terrain height down to sea level, giving
