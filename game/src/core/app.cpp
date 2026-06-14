@@ -99,6 +99,16 @@ bool App::init(const std::filesystem::path& executable_path) {
         }
     }
 
+    render_defaults_ = {
+        render::kSlopeGradientScale,
+        render::kAmbientR,
+        render::kAmbientG,
+        render::kAmbientB,
+        render::kVertexColorScale,
+        render::kAltiScaleFactor,
+        render::kPixelsPerWorldHeightUnit,
+    };
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -287,6 +297,14 @@ void App::render_dev_gui() {
             ImGui::Checkbox("Slope shading", &terrain_renderer_->slope_shading_enabled);
             ImGui::Checkbox("Terrain blending", &terrain_renderer_->terrain_blending_enabled);
             ImGui::Checkbox("Debug labels", &terrain_renderer_->terrain_debug_labels_enabled);
+            if (ImGui::DragFloat("Alti scale factor", &render::kAltiScaleFactor, 0.1f, 0.5f, 50.0f, "%.2f (EXE: 10.0)")) {
+                render::kAltiToWorldHeight = render::kAltiScaleFactor / 256.0f;
+                render::kPixelsPerAltiUnit = render::kPixelsPerWorldHeightUnit * render::kAltiToWorldHeight;
+                terrain_renderer_->rebuild_vertex_colors();
+            }
+            if (ImGui::DragFloat("Pixels per world-height unit", &render::kPixelsPerWorldHeightUnit, 0.25f, 1.0f, 200.0f, "%.2f (EXE: 45.25)")) {
+                render::kPixelsPerAltiUnit = render::kPixelsPerWorldHeightUnit * render::kAltiToWorldHeight;
+            }
         }
         ImGui::Separator();
         if (ImGui::Button("Lighting controls...")) {
@@ -319,11 +337,11 @@ void App::render_lighting_window() {
 
     ImGui::Separator();
     if (ImGui::Button("Reset to EXE defaults")) {
-        render::kSlopeGradientScale = 2.0f;
-        render::kAmbientR = 0.1369999945f;
-        render::kAmbientG = 0.0430000015f;
-        render::kAmbientB = 0.0f;
-        render::kVertexColorScale = 1.7f;
+        render::kSlopeGradientScale = render_defaults_.slope_gradient_scale;
+        render::kAmbientR = render_defaults_.ambient_r;
+        render::kAmbientG = render_defaults_.ambient_g;
+        render::kAmbientB = render_defaults_.ambient_b;
+        render::kVertexColorScale = render_defaults_.vertex_color_scale;
         changed = true;
     }
 

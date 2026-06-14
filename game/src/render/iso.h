@@ -10,10 +10,20 @@ namespace opente::render {
 constexpr float kTileWidth = 64.0f;
 constexpr float kTileHeight = 32.0f;
 
+/// Source scalar for `kAltiToWorldHeight`: EXE-confirmed value is 10.0.
+/// Runtime-adjustable (dev GUI lighting window).
+inline float kAltiScaleFactor = 10.0f;
+
 /// Converts a raw `mapp.alti` byte (0-255) to world-height units (0..9.96).
 /// EXE-confirmed (`documentation/08-investigation-needed.md` B15, Rounds
 /// 25-27): `height_world_units = alti_byte * 10.0 / 256.0`.
-constexpr float kAltiToWorldHeight = 10.0f / 256.0f;
+/// Runtime-adjustable (dev GUI lighting window); recomputed from
+/// `kAltiScaleFactor` whenever that slider changes.
+inline float kAltiToWorldHeight = kAltiScaleFactor / 256.0f;
+
+/// Source scalar for `kPixelsPerAltiUnit`: EXE-confirmed value is 45.25.
+/// Runtime-adjustable (dev GUI lighting window).
+inline float kPixelsPerWorldHeightUnit = 45.25f;
 
 /// World-pixels per raw `mapp.alti` byte unit, for converting a vertex's
 /// heightmap byte into a vertical world-pixel offset (subtracted from its
@@ -26,7 +36,9 @@ constexpr float kAltiToWorldHeight = 10.0f / 256.0f;
 /// `kAltiToWorldHeight` and dropping the `zoom` factor (applied uniformly by
 /// `Camera::world_to_screen` afterwards) gives a zoom-independent
 /// world-pixel-space constant: `45.25 * 10.0 / 256.0 ~= 1.7676`.
-constexpr float kPixelsPerAltiUnit = 45.25f * kAltiToWorldHeight;
+/// Runtime-adjustable (dev GUI lighting window); recomputed from
+/// `kPixelsPerWorldHeightUnit` and `kAltiToWorldHeight` whenever either changes.
+inline float kPixelsPerAltiUnit = kPixelsPerWorldHeightUnit * kAltiToWorldHeight;
 
 /// 3D vector, used only for the slope-shading normal/light-direction math
 /// below.

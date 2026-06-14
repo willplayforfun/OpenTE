@@ -69,11 +69,24 @@ private:
 
     void render_dev_gui();
 
-    /// Renders the second dev window: realtime sliders for the terrain
-    /// slope-shading lighting globals (render::kSlopeGradientScale,
-    /// kAmbientR/G/B, kVertexColorScale). Rebuilds the terrain vertex colors
-    /// whenever a value changes.
+    /// Renders the lighting sub-window: realtime sliders for the terrain
+    /// slope-shading globals (render::kSlopeGradientScale, kAmbientR/G/B,
+    /// kVertexColorScale). Rebuilds terrain vertex colors whenever a value
+    /// changes. "Reset to EXE defaults" restores render_defaults_ values.
     void render_lighting_window();
+
+    /// Snapshot of all adjustable render globals captured at startup
+    /// (before any GUI interaction), used by "Reset to EXE defaults".
+    struct RenderDefaults {
+        float slope_gradient_scale;
+        float ambient_r;
+        float ambient_g;
+        float ambient_b;
+        float vertex_color_scale;
+        float alti_scale_factor;
+        float pixels_per_world_height_unit;
+    };
+    RenderDefaults render_defaults_ = {};
 
     // Held-key state for continuous (per-frame) camera panning.
     bool pan_left_ = false;

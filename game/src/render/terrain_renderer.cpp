@@ -141,8 +141,16 @@ constexpr Uint8 kShoreLUT85[85] = {
 };
 
 /// Stage C.3: `dl` (0-14) -> `shape` (0-14), indexing the first 15 cells of
-/// `kShoreUvIndex`.
-constexpr int kShoreDlToShape[15] = {1, 2, 3, 0, 5, 4, 6, 9, 8, 7, 10, 11, 12, 13, 14};
+/// `kShoreUvIndex`.  These are the `shape` values the EXE's overlay2 jump
+/// table at `0x42b560` sets for each `dl`: `jt[dl]` -> `mov [shape], <imm>`.
+/// IMPORTANT: index by `dl` *through the jump table*, NOT by the cases'
+/// memory order -- `0x42b560` does not list its targets in address order, so
+/// reading the `mov [shape],imm` stubs sequentially gives a *scrambled*
+/// table.  The earlier `{1,2,3,0,5,4,6,9,8,7,...}` was exactly that mistake
+/// (it's the cases in address order), which mis-selected the concave-corner
+/// shape -- e.g. `dl=3` (water spike at the S vertex) drew shape 0, a
+/// W-facing cell, instead of shape 3.
+constexpr int kShoreDlToShape[15] = {1, 2, 7, 3, 5, 9, 11, 0, 6, 4, 10, 8, 13, 12, 14};
 
 /// Stage C.3: 53-cell UV-index array (`exe_b15_round37_shore_tables.txt`,
 /// "UV-index array @ 0x5f8940"). Each `(idx0, idx1)` is an index into the
@@ -199,19 +207,37 @@ TerrainRenderer::TerrainRenderer(SDL_Renderer* renderer, const world::Region& re
     };
 
     // Each grid vertex (col, row) is shared by up to 4 tiles
-    // ((col-1,row-1)..(col,row)); averaging their heights gives every shared
-    // vertex a single height (continuous mesh, no per-tile seams) and smooths
-    // out `alti`'s ~1-unit tile-to-tile noise.
+    // ((col-1,row-1), (col,row-1), (col-1,row), (col,row)).  Averaging
+    // their heights gives smooth slope shading across tile boundaries.
+    //
+    // Water constraint: if ANY of the 4 tiles is water, the vertex is
+    // pinned to sea_level so that water tiles render flat and adjacent land
+    // tiles' edges meet them seamlessly (no seam at the shared vertex).
+    const float sea = static_cast<float>(region_->sea_level());
+    auto is_water_tile = [&](int tx, int ty) -> bool {
+        tx = std::clamp(tx, 0, width - 1);
+        ty = std::clamp(ty, 0, height - 1);
+        const world::TerrainType t = region_->terrain_at(tx, ty);
+        return t == world::TerrainType::DeepWater || t == world::TerrainType::ShallowWater;
+    };
+
     terrain_vertex_height_.assign(static_cast<std::size_t>(vw * vh), 0.0f);
     for (int row = 0; row < vh; ++row) {
         for (int col = 0; col < vw; ++col) {
-            float sum = 0.0f;
-            for (int dy = -1; dy <= 0; ++dy) {
-                for (int dx = -1; dx <= 0; ++dx) {
-                    sum += tile_height(col + dx, row + dy);
+            const bool any_water =
+                is_water_tile(col - 1, row - 1) || is_water_tile(col, row - 1) ||
+                is_water_tile(col - 1, row)     || is_water_tile(col, row);
+            if (any_water) {
+                terrain_vertex_height_[static_cast<std::size_t>(row * vw + col)] = sea;
+            } else {
+                float sum = 0.0f;
+                for (int dy = -1; dy <= 0; ++dy) {
+                    for (int dx = -1; dx <= 0; ++dx) {
+                        sum += tile_height(col + dx, row + dy);
+                    }
                 }
+                terrain_vertex_height_[static_cast<std::size_t>(row * vw + col)] = sum / 4.0f;
             }
-            terrain_vertex_height_[static_cast<std::size_t>(row * vw + col)] = sum / 4.0f;
         }
     }
 
@@ -382,8 +408,8 @@ void TerrainRenderer::render(const Camera& camera) const {
     // Stage C shore overlays).
     static constexpr int kCornerCol[4] = {0, 1, 1, 0};
     static constexpr int kCornerRow[4] = {0, 0, 1, 1};
-    static constexpr float kUPeriod = 8.0f;
-    static constexpr float kVPeriod = 16.0f;
+    static constexpr float kUPeriod = 4.0f;
+    static constexpr float kVPeriod = 8.0f;
 
     render_background(camera);
 
@@ -403,17 +429,12 @@ void TerrainRenderer::render(const Camera& camera) const {
             // corners.  Matches the original's D3DPT_TRIANGLEFAN geometry
             // (center + 4 corners + closing repeat = 4 triangles through the
             // center, avoiding the diagonal-seam artifact of a 2-triangle split).
-            const bool is_water = own_index <= 2;
-            const float water_h = static_cast<float>(region_->sea_level()) * kPixelsPerAltiUnit;
-
             SDL_Vertex verts[5];
             for (int c = 0; c < 4; ++c) {
                 const int col = tx + kCornerCol[c];
                 const int row = ty + kCornerRow[c];
                 const std::size_t vidx = static_cast<std::size_t>(row) * vw + col;
-                const float height_offset = is_water
-                    ? water_h
-                    : terrain_vertex_height_[vidx] * kPixelsPerAltiUnit;
+                const float height_offset = terrain_vertex_height_[vidx] * kPixelsPerAltiUnit;
 
                 Vec2 world_pos = tile_to_world(static_cast<float>(col), static_cast<float>(row));
                 world_pos.y -= height_offset;
@@ -427,14 +448,19 @@ void TerrainRenderer::render(const Camera& camera) const {
                                            v0 + static_cast<float>(kCornerRow[c]) / kVPeriod};
             }
 
-            // Center vertex: position computed from the tile's own height.
-            // In the original, the center IS the tile's own grid vertex — its
-            // height comes directly from the heightmap (or sea_level for water),
-            // not from averaging neighbors.
+            // Center vertex: forced to sea level for water tiles and land
+            // tiles with a cardinal neighbor that is water.
             {
-                const float center_h_offset = is_water
-                    ? water_h
-                    : static_cast<float>(region_->height_at(tx, ty)) * kPixelsPerAltiUnit;
+                const bool center_at_sea =
+                    (own_index <= 2) ||
+                    (tx > 0          && texture_index_at(tx - 1, ty) <= 2) ||
+                    (tx < width - 1  && texture_index_at(tx + 1, ty) <= 2) ||
+                    (ty > 0          && texture_index_at(tx, ty - 1) <= 2) ||
+                    (ty < height - 1 && texture_index_at(tx, ty + 1) <= 2);
+                const float center_h_offset = (center_at_sea
+                    ? static_cast<float>(region_->sea_level())
+                    : terrain_vertex_height_[static_cast<std::size_t>(ty) * vw + tx])
+                    * kPixelsPerAltiUnit;
                 Vec2 center_world = tile_to_world(
                     static_cast<float>(tx) + 0.5f,
                     static_cast<float>(ty) + 0.5f);
@@ -619,11 +645,22 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
         return;
     }
 
-    // EXE draw order: overlay2 (concave corners) FIRST, then overlay1 on top.
-    // 56 of 256 mask values produce both overlays; the later draw wins where
-    // they overlap, so order matters.
+    // EXE draw order (`0x42acf0`): the directional overlay1 (LUT0) is drawn
+    // FIRST (at 0x42b07d), then the concave-corner overlay2 (shape) on top
+    // (at 0x42b16d).  56 of 256 masks produce both; the later draw wins where
+    // they overlap, so order matters — a previous version had these reversed.
 
-    // Overlay pass 1 — concave-corner flags (C.3, drawn first in the EXE).
+    // Overlay pass 1 — directional shore edge (C.2), drawn first.
+    const Uint8 overlay1 = kShoreLUT0[mask];
+    if (overlay1 != 255) {
+        if (overlay1 <= 52) {
+            draw_overlay(shore_atlas_textures_[0], overlay1);
+        } else {
+            draw_overlay(shore_atlas_textures_[1], overlay1 - 53);
+        }
+    }
+
+    // Overlay pass 2 — concave-corner flags (C.3), drawn second (on top).
     // Mask uses NOT-water bits (set=land, clear=water).  A corner flag fires
     // when the diagonal IS water (bit clear) but both adjacent cardinals are
     // NOT water (bits set) — a water tile poking diagonally into land.
@@ -640,16 +677,6 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
         const Uint8 dl = kShoreLUT85[flags - 1];
         if (dl != 15) {
             draw_overlay(shore_atlas_textures_[0], kShoreDlToShape[dl]);
-        }
-    }
-
-    // Overlay pass 2 — directional shore edge (C.2, drawn second in the EXE).
-    const Uint8 overlay1 = kShoreLUT0[mask];
-    if (overlay1 != 255) {
-        if (overlay1 <= 52) {
-            draw_overlay(shore_atlas_textures_[0], overlay1);
-        } else {
-            draw_overlay(shore_atlas_textures_[1], overlay1 - 53);
         }
     }
 }
