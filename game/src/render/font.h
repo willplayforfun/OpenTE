@@ -16,12 +16,14 @@ namespace opente::render {
 ///
 /// Atlas format (written by OpenTE extractor `sprites/font.py`):
 ///   - RGBA PNG, white ink (R=G=B=255), alpha = glyph coverage [0-255].
-///   - Y-flipped relative to on-disk storage so glyph-top is at low y.
+///   - Stored top-down (no Y-flip).
 ///   - Source rect for glyph i:
 ///       x = glyphs[i].atlas_x,  y = glyphs[i].atlas_y,
 ///       w = glyphs[i].slot_w,   h = glyphs[i].ink_h
-///   - Destination: (cursor_x, baseline_y - ink_h + 1)
-///     The source rect bottom (atlas_y + ink_h - 1) always aligns with baseline_y.
+///   - Destination: (cursor_x, baseline_y + glyphs[i].y_off)
+///     y_off is the offset from the baseline to the top of the glyph's ink
+///     (negative = above the baseline), so each glyph lands at its correct
+///     height regardless of cap/x-height/descender.
 ///
 /// Text colour is applied via SDL_SetTextureColorMod.
 /// SDL_BLENDMODE_BLEND is set on the texture at load time.
@@ -55,10 +57,11 @@ public:
 private:
     struct GlyphInfo {
         int atlas_x = 0;
-        int atlas_y = 0;   // top of ink in the Y-flipped atlas PNG
+        int atlas_y = 0;   // top of ink in the atlas PNG
         int slot_w  = 0;
         int ink_h   = 0;
         int advance = 0;
+        int y_off   = 0;   // baseline -> top-of-ink offset (negative = above)
     };
 
     BitmapFont() = default;

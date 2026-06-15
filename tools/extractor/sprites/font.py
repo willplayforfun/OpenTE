@@ -8,18 +8,45 @@ Output layout under ``game_data/fonts/``::
 
 Atlas format notes
 ------------------
-* ``font.{}`` stores each glyph **upside-down** (high atlas-y = top of glyph).
-  We Y-flip the entire atlas on export so normal top-down reads are correct.
-* Raw pixel values are in [0, 8] where 8 = fully opaque.  We scale to
-  SDL-alpha via ``alpha = min(255, value * 32)``.
-* The source rect for glyph *i* in the exported PNG is::
+Each face/size has four leaves, in order: ``[atlas, metrics, cmap, big]``.
 
-      x = glyphs[i]["atlas_x"],   y = glyphs[i]["atlas_y"],
-      w = glyphs[i]["slot_w"],    h = glyphs[i]["ink_h"]
+* **Atlas leaf** (``bg6a``, ``field3 == 7`` = 8bpp grayscale): a 32-byte
+  ``bg6a`` header (8 × int32: magic, version, str_rel, field3, width, height,
+  off_x, off_y), then a **fixed 516-byte sub-header**, then ``width * height``
+  raw pixel bytes (row-major, top-down).  Pixel values are in ``[0, 8]`` and
+  scale to SDL alpha via ``alpha = min(255, value * 32)``.
 
-* Destination baseline offset:  ``dest_y = baseline_y - ink_h + 1``
-  (bottom of ink aligns with baseline for non-descenders; glyphs with
-  ``atlas_y < descender`` extend ink below the baseline).
+  IMPORTANT: the pixel data does NOT start immediately after the 32-byte
+  header — there are 516 bytes in between.  Reading from ``+32`` shifts every
+  row left by 516 px and scrambles the whole strip (this was the long-standing
+  "unintelligible fonts" bug).  We read the payload from the *end* of the leaf
+  (``abs_off + size - width*height``), which equals ``+32+516`` for every
+  observed atlas and is robust to any trailing slack.
+
+  The strip is a single ``height``-tall row holding every glyph side-by-side;
+  glyph *i* occupies columns ``[orig_x, orig_x + slot_w)``.  No Y-flip is
+  needed — the strip is already stored top-down.
+
+* **Metrics leaf**: 4 × int32 = ``(-ascender, -descender, max_advance,
+  line_height)``.
+
+* **CMap leaf**: dense ``uint16`` array, ``cmap[codepoint] = glyph_index``.
+
+* **Big (glyph) leaf**: 28 bytes/glyph (7 × int32):
+  ``[orig_x, top_row, slot_w, advance, left_bearing, ink_h, ink_w]``.
+  ``orig_x`` is the cumulative sum of ``slot_w`` (the glyph's column in the
+  strip).  ``top_row`` is the strip row of the glyph's ink top; the ink
+  occupies strip rows ``[top_row, top_row + ink_h)``.  The glyph metrics
+  (slot_w/advance/ink_h/top_row) are in standard glyph-id order and indexed
+  directly by the cmap value.
+
+Vertical placement
+------------------
+The baseline sits at strip row ``B`` (computed as the common ``top_row +
+ink_h`` of the capital letters A–Z, which rest on the baseline).  Each glyph
+is emitted with ``y_off = top_row - B``: the offset, in pixels, from the text
+baseline to the *top* of the glyph's ink (negative = above the baseline).
+The renderer draws each glyph at ``dst.y = baseline_y + y_off``.
 
 JSON schema
 -----------
@@ -28,14 +55,14 @@ JSON schema
     {
       "face": "clea", "pt": 12, "atlas_w": <int>, "atlas_h": <int>,
       "metrics": {
-        "ascender": <int>,    // px above baseline for tallest glyph
-        "descender": <int>,   // px below baseline (positive)
-        "max_advance": <int>, "line_height": <int>
+        "ascender": <int>, "descender": <int>,
+        "max_advance": <int>, "line_height": <int>, "baseline": <int>
       },
-      "cmap": [<uint16>, ...],  // dense: cmap[codepoint] = glyph_index
+      "cmap": [<uint16>, ...],            // dense: cmap[codepoint] = glyph_index
       "glyphs": [
         { "atlas_x": <int>, "atlas_y": <int>,
-          "slot_w": <int>,  "ink_h": <int>, "advance": <int> },
+          "slot_w": <int>,  "ink_h": <int>,
+          "advance": <int>, "y_off": <int> },
         ...
       ]
     }
@@ -44,6 +71,7 @@ from __future__ import annotations
 
 import json
 import struct
+from collections import Counter
 from pathlib import Path
 
 from ..containers.container import DirNode
@@ -64,57 +92,6 @@ def _pt_tag(pt: int) -> str:
 
 # SDL2 hard-limits textures to 16384×16384.  Keep rows well under that.
 _MAX_ROW_WIDTH = 4096
-
-
-def _flip_and_scale_rgba(raw: bytes, w: int, h: int) -> bytes:
-    """Y-flip the atlas and scale pixel values [0-8] → alpha [0-255].
-
-    Returns a flat RGBA byte array with R=G=B=255 and A=min(255, v*32).
-    y=0 in the result is the original bottom row (glyph-top after flip).
-    """
-    rgba = bytearray(w * h * 4)
-    for y in range(h):
-        src_row = h - 1 - y          # flip: original bottom row → new row 0
-        for x in range(w):
-            v = raw[src_row * w + x]
-            a = v * 32
-            if a > 255:
-                a = 255
-            i = (y * w + x) * 4
-            rgba[i]     = 255
-            rgba[i + 1] = 255
-            rgba[i + 2] = 255
-            rgba[i + 3] = a
-    return bytes(rgba)
-
-
-def _repack_rows(strip_rgba: bytes, strip_w: int, row_h: int,
-                 glyph_recs: list[dict]) -> tuple[bytes, int, int]:
-    """Repack a single-strip flipped RGBA atlas into a multi-row layout.
-
-    Each glyph rec must have orig_x, slot_w, new_atlas_x, new_row already set.
-    Returns (new_rgba, new_w, new_h).
-    """
-    num_rows = (max(g["new_row"] for g in glyph_recs) + 1) if glyph_recs else 1
-    new_w = max(
-        (g["new_atlas_x"] + g["slot_w"]) for g in glyph_recs if g["slot_w"] > 0
-    ) if any(g["slot_w"] > 0 for g in glyph_recs) else 1
-    new_h = num_rows * row_h
-
-    new_rgba = bytearray(new_w * new_h * 4)
-    for g in glyph_recs:
-        if g["slot_w"] <= 0:
-            continue
-        orig_x  = g["orig_x"]
-        new_x   = g["new_atlas_x"]
-        new_yb  = g["new_row"] * row_h
-        sw      = g["slot_w"]
-        for row in range(row_h):
-            src = (row * strip_w + orig_x) * 4
-            dst = ((new_yb + row) * new_w + new_x) * 4
-            new_rgba[dst:dst + sw * 4] = strip_rgba[src:src + sw * 4]
-
-    return bytes(new_rgba), new_w, new_h
 
 
 def _write_png_rgba(path: Path, w: int, h: int, rgba: bytes) -> None:
@@ -152,13 +129,16 @@ def extract_fonts(font_data: bytes, font_root: DirNode, output_dir: Path) -> lis
 
             atlas_leaf, metrics_leaf, cmap_leaf, big_leaf = leaves[:4]
 
-            # --- Atlas (bg6a header: 8 × int32, then w*h raw bytes) ---
+            # --- Atlas (bg6a header: 8 × int32, then a 516-byte sub-header,
+            #     then width*height raw grayscale bytes at the END of the leaf) ---
             aoff = atlas_leaf.abs_off
             strip_w, row_h = struct.unpack_from("<ii", font_data, aoff + 16)
-            raw_pix = font_data[aoff + 32: aoff + 32 + strip_w * row_h]
-            strip_rgba = _flip_and_scale_rgba(raw_pix, strip_w, row_h)
+            # Pixel payload sits at the end of the leaf, after the 32-byte
+            # header + a fixed 516-byte sub-header.  Anchor to the end so any
+            # trailing slack is ignored and the sub-header is skipped exactly.
+            pix_base = aoff + atlas_leaf.size - strip_w * row_h
 
-            # --- Metrics: 4 × int32 = (neg_ascender, neg_descender, max_adv, line_h) ---
+            # --- Metrics: 4 × int32 = (-ascender, -descender, max_adv, line_h) ---
             m = struct.unpack_from("<4i", font_data, metrics_leaf.abs_off)
             metrics = {
                 "ascender":    -m[0],   # positive = px above baseline
@@ -173,51 +153,93 @@ def extract_fonts(font_data: bytes, font_root: DirNode, output_dir: Path) -> lis
                 f"<{cmap_count}H", font_data, cmap_leaf.abs_off))
 
             # --- Big table: 28 bytes/glyph (7 × int32) ---
-            # f[0]=orig_atlas_x  f[1]=within_row_y (in flipped strip)
-            # f[2]=slot_w        f[3]=advance
-            # f[4]=unused        f[5]=ink_h   f[6]=unused
-            #
-            # Remap glyphs into rows of ≤_MAX_ROW_WIDTH pixels so the atlas
-            # PNG stays within SDL2's 16384px texture limit.
+            # f[0]=orig_x  f[1]=top_row  f[2]=slot_w (bitmap width)
+            # f[3]=ink_h+1 (unused)  f[4]=left_bearing  f[5]=ink_h
+            # f[6]=advance (pen advance; e.g. i/l/!=5, m=15, W=14, space=5).
+            # NOTE: the advance is f[6], NOT f[3] — f[3] tracks ink_h and gives
+            # nonsense spacing (narrow 'i' would advance like a capital).
             n_glyph = big_leaf.size // 28
+            raw_recs = [
+                struct.unpack_from("<7i", font_data, big_leaf.abs_off + gi * 28)
+                for gi in range(n_glyph)
+            ]
+
+            # Baseline strip row: capitals A–Z rest on the baseline, so their
+            # ink bottom (top_row + ink_h) marks it.  Fall back to line_height.
+            cap_bottoms = Counter()
+            for cp in range(ord("A"), ord("Z") + 1):
+                if cp < cmap_count:
+                    gi = cmap_list[cp]
+                    if gi < n_glyph:
+                        r = raw_recs[gi]
+                        cap_bottoms[r[1] + r[5]] += 1
+            baseline = cap_bottoms.most_common(1)[0][0] if cap_bottoms else m[3]
+            metrics["baseline"] = baseline
+
+            # Lay glyphs out into rows of ≤_MAX_ROW_WIDTH px so the atlas PNG
+            # stays within SDL2's 16384px texture limit.  Each glyph copies its
+            # tight ink box [top_row, top_row+ink_h) × [orig_x, orig_x+slot_w)
+            # from the strip; vertical placement is recovered at draw time from
+            # y_off = top_row - baseline.
             glyph_recs: list[dict] = []
             cur_row_x = 0
-            cur_row   = 0
+            cur_row = 0
             for gi in range(n_glyph):
-                rec = struct.unpack_from("<7i", font_data,
-                                        big_leaf.abs_off + gi * 28)
-                sw = rec[2]
-                if sw > 0 and cur_row_x + sw > _MAX_ROW_WIDTH:
-                    cur_row  += 1
+                orig_x, top_row, slot_w, _h1, _lb, ink_h, advance = raw_recs[gi]
+                if slot_w > 0 and cur_row_x + slot_w > _MAX_ROW_WIDTH:
+                    cur_row += 1
                     cur_row_x = 0
                 glyph_recs.append({
-                    "orig_x":      rec[0],
-                    "within_row_y": rec[1],
-                    "slot_w":      sw,
-                    "advance":     rec[3],
-                    "ink_h":       rec[5],
+                    "orig_x":     orig_x,
+                    "top_row":    top_row,
+                    "slot_w":     slot_w,
+                    "advance":    advance,
+                    "ink_h":      ink_h,
                     "new_atlas_x": cur_row_x,
-                    "new_row":     cur_row,
+                    "new_row":    cur_row,
+                    "y_off":      top_row - baseline,
                 })
-                cur_row_x += sw
+                cur_row_x += slot_w
 
-            # Build the repacked atlas PNG.
-            new_rgba, new_w, new_h = _repack_rows(
-                strip_rgba, strip_w, row_h, glyph_recs)
+            # --- Build the repacked atlas RGBA ---
+            num_rows = (max(g["new_row"] for g in glyph_recs) + 1) if glyph_recs else 1
+            new_w = max(
+                (g["new_atlas_x"] + g["slot_w"]) for g in glyph_recs if g["slot_w"] > 0
+            ) if any(g["slot_w"] > 0 for g in glyph_recs) else 1
+            new_h = num_rows * row_h
+            new_rgba = bytearray(new_w * new_h * 4)
+            for g in glyph_recs:
+                sw, ih = g["slot_w"], g["ink_h"]
+                if sw <= 0 or ih <= 0:
+                    continue
+                band_top = g["new_row"] * row_h
+                for k in range(ih):
+                    src = pix_base + (g["top_row"] + k) * strip_w + g["orig_x"]
+                    dst = ((band_top + k) * new_w + g["new_atlas_x"]) * 4
+                    for j in range(sw):
+                        v = font_data[src + j]
+                        a = v * 32
+                        if a > 255:
+                            a = 255
+                        o = dst + j * 4
+                        new_rgba[o] = 255
+                        new_rgba[o + 1] = 255
+                        new_rgba[o + 2] = 255
+                        new_rgba[o + 3] = a
+
             stem = f"{face_child.tag}_{pt}pt"
-            _write_png_rgba(fonts_dir / f"{stem}_atlas.png", new_w, new_h, new_rgba)
+            _write_png_rgba(fonts_dir / f"{stem}_atlas.png", new_w, new_h, bytes(new_rgba))
 
-            # Build glyph list with updated atlas coordinates.
-            # atlas_y = row_offset + within_row_y, so SDL_RenderCopy source
-            # rect (atlas_x, atlas_y, slot_w, ink_h) is correct directly.
+            # --- Glyph list with atlas coordinates + baseline-relative offset ---
             glyphs = []
             for g in glyph_recs:
                 glyphs.append({
                     "atlas_x": g["new_atlas_x"],
-                    "atlas_y": g["new_row"] * row_h + g["within_row_y"],
+                    "atlas_y": g["new_row"] * row_h,
                     "slot_w":  g["slot_w"],
-                    "advance": g["advance"],
                     "ink_h":   g["ink_h"],
+                    "advance": g["advance"],
+                    "y_off":   g["y_off"],
                 })
 
             out = {

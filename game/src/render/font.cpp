@@ -122,6 +122,7 @@ std::unique_ptr<BitmapFont> BitmapFont::load(SDL_Renderer* renderer,
         gi.slot_w  = g.at("slot_w").get<int>();
         gi.ink_h   = g.at("ink_h").get<int>();
         gi.advance = g.at("advance").get<int>();
+        gi.y_off   = g.value("y_off", 0);
         font->glyphs_.push_back(gi);
     }
 
@@ -149,9 +150,10 @@ void BitmapFont::draw_text(SDL_Renderer* renderer,
             continue;
         }
 
-        // Source rect bottom (atlas_y + ink_h - 1) maps to baseline_y on screen.
+        // Place the glyph's ink top at baseline_y + y_off so its baseline
+        // falls at baseline_y (y_off is negative for above-baseline ink).
         const SDL_Rect src{g.atlas_x, g.atlas_y, g.slot_w, g.ink_h};
-        const SDL_Rect dst{x, baseline_y - g.ink_h + 1, g.slot_w, g.ink_h};
+        const SDL_Rect dst{x, baseline_y + g.y_off, g.slot_w, g.ink_h};
         SDL_RenderCopy(renderer, atlas_, &src, &dst);
         x += g.advance;
     }
