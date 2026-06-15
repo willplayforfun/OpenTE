@@ -6,10 +6,12 @@
 #include <imgui_impl_sdlrenderer2.h>
 
 #include <iostream>
+#include <memory>
 #include <utility>
 
 #include "core/paths.h"
 #include "render/iso.h"
+#include "ui/build_menu.h"
 
 namespace opente::core {
 
@@ -109,6 +111,13 @@ bool App::init(const std::filesystem::path& executable_path) {
         render::kPixelsPerWorldHeightUnit,
     };
 
+    // Initialise the UI manager.  Assets are looked up next to the executable.
+    const std::filesystem::path assets_dir = executable_path.parent_path() / "assets";
+    if (!ui_manager_.init(renderer_, assets_dir)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "UIManager::init failed — cannot continue.");
+        return false;
+    }
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -146,7 +155,10 @@ int App::run() {
             if (io.WantCaptureMouse && (event.type == SDL_MOUSEWHEEL))
                 continue;
 
-            handle_event(event);
+            // UI gets first crack at events; only forward to game if unconsumed.
+            if (!ui_manager_.handle_event(event)) {
+                handle_event(event);
+            }
         }
 
         const Uint32 now_ticks = SDL_GetTicks();
@@ -171,8 +183,19 @@ void App::handle_event(const SDL_Event& event) {
             switch (event.key.keysym.sym) {
                 case SDLK_ESCAPE:
                     if (down) {
-                        running_ = false;
+                        if (ui_manager_.has_open_dialogs()) {
+                            // Close the topmost dialog on Escape.
+                            if (build_menu_ptr_) {
+                                ui_manager_.close(build_menu_ptr_);
+                                build_menu_ptr_ = nullptr;
+                            }
+                        } else {
+                            running_ = false;
+                        }
                     }
+                    break;
+                case SDLK_b:
+                    if (down) toggle_build_menu();
                     break;
                 case SDLK_LEFT:
                 case SDLK_a:
@@ -237,6 +260,9 @@ void App::render() {
         render_buildings();
     }
 
+    // UI renders on top of the game world, before the ImGui dev overlay.
+    ui_manager_.render();
+
     if (show_dev_gui_) {
         render_dev_gui();
     }
@@ -287,6 +313,30 @@ void App::render_buildings() {
                               screen_pos.y + hq_sprite_.anchor_y * camera_.zoom, w, h};
         SDL_RenderCopyF(renderer_, hq_sprite_.texture.handle(), nullptr, &dest);
     }
+}
+
+void App::toggle_build_menu() {
+    if (build_menu_ptr_) {
+        ui_manager_.close(build_menu_ptr_);
+        build_menu_ptr_ = nullptr;
+        return;
+    }
+    if (!registry_) return;  // no data loaded yet
+
+    int win_w = 0, win_h = 0;
+    SDL_GetWindowSize(window_, &win_w, &win_h);
+
+    auto menu = std::make_unique<ui::BuildMenu>(
+        registry_->buildings(),
+        [this](const std::string& building_id) {
+            // TODO (Stage 2): enter placement mode for `building_id`.
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Build menu selected: %s", building_id.c_str());
+            ui_manager_.close(build_menu_ptr_);
+            build_menu_ptr_ = nullptr;
+        });
+    build_menu_ptr_ = menu.get();
+    ui_manager_.open(std::move(menu), win_w, win_h);
 }
 
 void App::render_dev_gui() {
@@ -353,6 +403,8 @@ void App::render_lighting_window() {
 }
 
 App::~App() {
+    ui_manager_.shutdown();
+
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();

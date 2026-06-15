@@ -18,6 +18,7 @@ endif()
 
 find_package(SDL2 CONFIG REQUIRED)
 find_package(SDL2_image CONFIG REQUIRED)
+find_package(SDL2_ttf CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 
@@ -30,6 +31,9 @@ add_executable(opente
     src/render/texture.cpp
     src/world/region.cpp
     src/world/world.cpp
+    src/ui/panel.cpp
+    src/ui/manager.cpp
+    src/ui/build_menu.cpp
 )
 
 target_include_directories(opente PRIVATE src)
@@ -38,6 +42,7 @@ target_link_libraries(opente PRIVATE
     $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
     $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
     $<IF:$<TARGET_EXISTS:SDL2_image::SDL2_image>,SDL2_image::SDL2_image,SDL2_image::SDL2_image-static>
+    $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
     nlohmann_json::nlohmann_json
     imgui::imgui
 )

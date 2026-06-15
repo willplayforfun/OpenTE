@@ -11,6 +11,7 @@
 #include "render/camera.h"
 #include "render/terrain_renderer.h"
 #include "render/texture.h"
+#include "ui/manager.h"
 #include "world/world.h"
 
 namespace opente::core {
@@ -59,6 +60,8 @@ private:
     render::Camera camera_;
     AnchoredSprite hq_sprite_;
 
+    ui::UIManager ui_manager_;
+
     /// Ground-decoration sprites, keyed by `data::SpriteEntry::id`
     /// (e.g. "flor.chin.3").
     std::map<std::string, AnchoredSprite> decoration_sprites_;
@@ -68,6 +71,7 @@ private:
     bool show_lighting_window_ = false;
 
     void render_dev_gui();
+    void toggle_build_menu();
 
     /// Renders the lighting sub-window: realtime sliders for the terrain
     /// slope-shading globals (render::kSlopeGradientScale, kAmbientR/G/B,
@@ -89,10 +93,13 @@ private:
     RenderDefaults render_defaults_ = {};
 
     // Held-key state for continuous (per-frame) camera panning.
-    bool pan_left_ = false;
+    bool pan_left_  = false;
     bool pan_right_ = false;
-    bool pan_up_ = false;
-    bool pan_down_ = false;
+    bool pan_up_    = false;
+    bool pan_down_  = false;
+
+    // Non-null while the build menu is open; used to close it on a second 'B'.
+    ui::Widget* build_menu_ptr_ = nullptr;
 };
 
 }  // namespace opente::core
