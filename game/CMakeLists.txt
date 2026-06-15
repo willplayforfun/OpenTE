@@ -38,6 +38,7 @@ add_executable(opente
     src/ui/panel.cpp
     src/ui/manager.cpp
     src/ui/build_menu.cpp
+    src/ui/main_menu_scene.cpp
 )
 
 target_include_directories(opente PRIVATE src)

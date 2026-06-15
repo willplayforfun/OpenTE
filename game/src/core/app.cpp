@@ -7,12 +7,13 @@
 
 #include "core/paths.h"
 #include "gameplay/gameplay_scene.h"
+#include "ui/main_menu_scene.h"
 
 namespace opente::core {
 
 namespace {
-constexpr int         kWindowWidth  = 1280;
-constexpr int         kWindowHeight = 720;
+constexpr int         kWindowWidth  = 1024;
+constexpr int         kWindowHeight = 768;
 constexpr const char* kWindowTitle  = "OpenTE";
 constexpr const char* kStartMapId   = "ep01_chin";
 }  // namespace
@@ -75,9 +76,9 @@ bool App::init(const std::filesystem::path& executable_path) {
     ImGui_ImplSDL2_InitForSDLRenderer(window_, renderer_);
     ImGui_ImplSDLRenderer2_Init(renderer_);
 
-    scene_manager_.set_scene(
-        std::make_unique<gameplay::GameplayScene>(
-            window_, renderer_, *registry_, kStartMapId));
+    auto mm = std::make_unique<ui::MainMenuScene>(window_, renderer_, *registry_);
+    main_menu_ = mm.get();
+    scene_manager_.set_scene(std::move(mm));
 
     return true;
 }
@@ -101,6 +102,15 @@ int App::run() {
 
         if (scene_manager_.wants_quit())
             running_ = false;
+
+        // Main menu → gameplay transition (checked between frames so the scene
+        // is never destroyed while it is still on the call stack).
+        if (main_menu_ && main_menu_->wants_start_game()) {
+            main_menu_ = nullptr;
+            scene_manager_.set_scene(
+                std::make_unique<gameplay::GameplayScene>(
+                    window_, renderer_, *registry_, kStartMapId));
+        }
 
         const Uint32 now = SDL_GetTicks();
         const float  dt  = static_cast<float>(now - last_ticks) / 1000.0f;

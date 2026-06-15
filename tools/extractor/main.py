@@ -31,7 +31,7 @@ from .sprites.decorations import extract_decoration_sprites
 from .sprites.font import extract_fonts
 from .sprites.sprite import decode_sprite, find_leaf, write_png_rgba
 from .sprites.terrain import extract_terrain_textures_all_cultures
-from .sprites.ui import extract_ui_sprites
+from .sprites.ui import extract_ui_sprites, extract_main_menu_sprites
 from .tables.abilities import extract_abilities
 from .tables.bandits import extract_bandits
 from .tables.buildings import extract_buildings
@@ -264,12 +264,19 @@ def run(game_dir: GameDirectory, output_dir: Path) -> None:
     print(f"  {len(flor_entries)} decoration sprites written")
 
     # a_ui,6.{}: main game UI sprites in RGB565 (181 leaves across 26 dialog groups).
-    # a_ui,5.{} is byte-for-byte identical art in RGB555 -- skipped.
+    # a_ui,5.{} holds the same dialog-group art in RGB555 PLUS the exclusive
+    # 'main/' group (main-menu background, button highlights, logos).
     print("Extracting a_ui sprites (181 sprites, this takes a while)...")
     a_ui_data, a_ui_footer = load(game_dir.data_dir / "a_ui,6.{}")
     a_ui_root = parse_tree(a_ui_data, a_ui_footer)
     a_ui_entries = extract_ui_sprites("a_ui", a_ui_data, a_ui_root, output_dir)
     sprite_entries += a_ui_entries
+
+    print("Extracting main menu sprites (a_ui,5.{}/main/)...")
+    a_ui5_data, a_ui5_footer = load(game_dir.data_dir / "a_ui,5.{}")
+    a_ui5_root = parse_tree(a_ui5_data, a_ui5_footer)
+    main_entries = extract_main_menu_sprites(a_ui5_data, a_ui5_root, output_dir)
+    sprite_entries += main_entries
 
     # d_ui,5.{}: debug/dev UI sprites in ARGB4444 with per-pixel alpha (379 leaves).
     # d_ui,6.{} is byte-identical to d_ui,5 -- skipped.

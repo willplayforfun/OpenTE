@@ -8,6 +8,9 @@
 #include "core/scene_manager.h"
 #include "data/registry.h"
 
+// Forward-declare to avoid pulling in the full header here.
+namespace opente::ui { class MainMenuScene; }
+
 namespace opente::core {
 
 /// Application shell: owns the SDL window/renderer, the shared DataRegistry,
@@ -35,6 +38,10 @@ private:
     // scene_manager_ declared last so it's destroyed first (before the
     // renderer), ensuring all scene-owned textures are freed in time.
     SceneManager scene_manager_;
+
+    // Non-owning pointer valid while MainMenuScene is the active scene.
+    // Nulled before any scene transition away from the main menu.
+    ui::MainMenuScene* main_menu_ = nullptr;
 
     bool running_ = false;
 };
