@@ -25,7 +25,7 @@ from typing import Any, Callable
 from .containers.container import DirNode, load, parse_tree
 from .game_directory import GameDirectory, find_game_directory
 from .manifest import Manifest, MapEntry, SpriteEntry, TableEntry, write_manifest
-from .maps.region import extract_map
+from .maps.region import extract_map, get_map_culture
 from .sprites.buildings import find_building_sprite_path
 from .sprites.decorations import extract_decoration_sprites
 from .sprites.font import extract_fonts
@@ -179,6 +179,22 @@ def _extract_maps(
     if not discovered:
         print("  warning: no map files found in Maps/ directory")
 
+    # Pre-scan: find the first non-empty regi.cult in each episode so that
+    # "secondary" regions (no regi element → no player HQ) can inherit the
+    # episode's cultural palette instead of falling back to "".
+    ep_home_culture: dict[str, str] = {}
+    for _mid, ep_id, fstem, _reg in discovered:
+        if ep_id in ep_home_culture:
+            continue
+        try:
+            mdata, mfoot = load(game_dir.maps_dir / f"{fstem}.{{}}")
+            mroot = parse_tree(mdata, mfoot)
+            cult = get_map_culture(mdata, mroot)
+            if cult:
+                ep_home_culture[ep_id] = cult
+        except Exception:
+            pass
+
     map_entries = []
     sprite_entries: dict[str, SpriteEntry] = {}
 
@@ -189,7 +205,8 @@ def _extract_maps(
         # Pass only the single matching region so extract_map picks the right
         # id/name for episode_regions[0] without being confused by sibling regions.
         result = extract_map(map_data, map_root, map_id=map_id, episode=episode,
-                              episode_regions=[ep_region], data_data=data_data, data_root=data_root)
+                              episode_regions=[ep_region], data_data=data_data, data_root=data_root,
+                              fallback_culture=ep_home_culture.get(episode, ""))
 
         relative_path = Path("maps") / f"{map_id}.json"
         write_json(output_dir / relative_path, result)

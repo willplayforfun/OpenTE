@@ -117,6 +117,25 @@ def _load_city_names(data: bytes, data_root: DirNode, culture: str) -> dict[int,
     return names
 
 
+def get_map_culture(map_data: bytes, map_root: DirNode) -> str:
+    """Return the first `regi.cult` value found in the map file, or ``''``."""
+    elem_entry = find_child(map_root, "elem")
+    if elem_entry is None or elem_entry.dir is None:
+        return ""
+    for child in elem_entry.dir.children:
+        if child.kind != "dir" or child.dir is None:
+            continue
+        fields, _next_off = parse_record(map_data, child.dir.offset)
+        tf = fields.get("type")
+        if tf is None:
+            continue
+        if tf.value == "regi":
+            cv = getattr(fields.get("cult"), "value", None) or ""
+            if cv:
+                return cv
+    return ""
+
+
 def extract_map(
     map_data: bytes,
     map_root: DirNode,
@@ -126,6 +145,7 @@ def extract_map(
     episode_regions: list[dict[str, Any]],
     data_data: bytes,
     data_root: DirNode,
+    fallback_culture: str = "",
 ) -> dict[str, Any]:
     """Returns a `maps/<map_id>.json` dict for one `Maps/*.{}` file.
 
@@ -215,7 +235,7 @@ def extract_map(
 
     cities: list[dict[str, Any]] = []
     if bepe_records:
-        culture_set = regi_records[0]["culture_set"] if regi_records else ""
+        culture_set = regi_records[0]["culture_set"] if regi_records else fallback_culture
         city_names = _load_city_names(data_data, data_root, culture_set) if culture_set else {}
         for bepe in bepe_records:
             # city_names.get(key, fallback) only uses the fallback when the key
@@ -230,7 +250,7 @@ def extract_map(
 
     name = episode_regions[0]["name"] if episode_regions else map_id
 
-    culture_set = regi_records[0]["culture_set"] if regi_records else ""
+    culture_set = regi_records[0]["culture_set"] if regi_records else fallback_culture
 
     return {
         "id": map_id,

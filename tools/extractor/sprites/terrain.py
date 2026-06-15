@@ -108,6 +108,29 @@ _CULTURES: dict[str, dict] = {
     },
 }
 
+# Maps every culture code that appears in regi.cult to the named palette that
+# holds its terrain sprites.  data_catalog_terr_sets.txt has only 4 named
+# entries (ind1/eur1/chi1/per1 at indices 0/15/16/17); numbered variants
+# (chi2, eur2-5, ind2-3, per2-3, mon1-2) differ only in city names / building
+# sprites and share the same terrain art as their base palette.
+_CULTURE_TO_BASE: dict[str, str] = {
+    "chi1": "chi1",
+    "chi2": "chi1",
+    "eur1": "eur1",
+    "eur2": "eur1",
+    "eur3": "eur1",
+    "eur4": "eur1",
+    "eur5": "eur1",
+    "ind1": "ind1",
+    "ind2": "ind1",
+    "ind3": "ind1",
+    "per1": "per1",
+    "per2": "per1",
+    "per3": "per1",
+    "mon1": "ind1",
+    "mon2": "ind1",
+}
+
 _EDGE_TEXTURE_TAG = "edge"
 _EDGE_SPRITE_ID = "terrain.edge"
 
@@ -249,6 +272,12 @@ def extract_terrain_textures_all_cultures(
                 width=sprite.width,
                 height=sprite.height,
             ))
+
+    # Populate alias entries so C++ can do a direct lookup by any regi.cult value.
+    # Aliases share the base palette's sprite IDs (no extra PNGs needed).
+    for alias, base in _CULTURE_TO_BASE.items():
+        if alias not in cultures_json and base in cultures_json:
+            cultures_json[alias] = cultures_json[base]
 
     write_json(output_dir / _TERRAIN_TEXTURES_TABLE_PATH, {"cultures": cultures_json})
 
