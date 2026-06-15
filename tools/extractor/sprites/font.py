@@ -154,8 +154,12 @@ def extract_fonts(font_data: bytes, font_root: DirNode, output_dir: Path) -> lis
 
             # --- Big table: 28 bytes/glyph (7 × int32) ---
             # f[0]=orig_x  f[1]=top_row  f[2]=slot_w (bitmap width)
-            # f[3]=ink_h+1 (unused)  f[4]=left_bearing  f[5]=ink_h
+            # f[3]=unused  f[4]=left_bearing  f[5]=height-to-baseline
             # f[6]=advance (pen advance; e.g. i/l/!=5, m=15, W=14, space=5).
+            # NOTE: f[5] is `baseline - top_row` (ink top down to the baseline),
+            # NOT the full ink height — it omits descender rows.  The real ink
+            # height is recovered per-glyph by scanning the strip (true_ink_h
+            # below); using f[5] directly clips the tails off g/p/q/y/j/Q.
             # NOTE: the advance is f[6], NOT f[3] — f[3] tracks ink_h and gives
             # nonsense spacing (narrow 'i' would advance like a capital).
             n_glyph = big_leaf.size // 28
@@ -176,6 +180,26 @@ def extract_fonts(font_data: bytes, font_root: DirNode, output_dir: Path) -> lis
             baseline = cap_bottoms.most_common(1)[0][0] if cap_bottoms else m[3]
             metrics["baseline"] = baseline
 
+            # Compute the TRUE ink height of a glyph by scanning the strip.
+            #
+            # The big-table's f[5] is NOT the full ink height — it measures
+            # `baseline - top_row`, i.e. the height from the glyph's ink top
+            # down to the baseline ONLY, with descender rows (below the
+            # baseline) excluded.  Cropping to f[5] therefore chops the tails
+            # off 'g','p','q','y','j','Q', … .  Recover the real bottom by
+            # scanning the glyph's column band downward for the last non-blank
+            # strip row.  (max_advance/descender keep the descender well inside
+            # row_h, so we never read past the strip.)
+            def true_ink_h(orig_x: int, top_row: int, slot_w: int, fallback: int) -> int:
+                if slot_w <= 0:
+                    return fallback
+                last_nz = -1
+                for row in range(top_row, row_h):
+                    base = pix_base + row * strip_w + orig_x
+                    if any(font_data[base + j] for j in range(slot_w)):
+                        last_nz = row
+                return (last_nz - top_row + 1) if last_nz >= top_row else fallback
+
             # Lay glyphs out into rows of ≤_MAX_ROW_WIDTH px so the atlas PNG
             # stays within SDL2's 16384px texture limit.  Each glyph copies its
             # tight ink box [top_row, top_row+ink_h) × [orig_x, orig_x+slot_w)
@@ -185,7 +209,8 @@ def extract_fonts(font_data: bytes, font_root: DirNode, output_dir: Path) -> lis
             cur_row_x = 0
             cur_row = 0
             for gi in range(n_glyph):
-                orig_x, top_row, slot_w, _h1, _lb, ink_h, advance = raw_recs[gi]
+                orig_x, top_row, slot_w, _h1, _lb, _ink_h_to_baseline, advance = raw_recs[gi]
+                ink_h = true_ink_h(orig_x, top_row, slot_w, _ink_h_to_baseline)
                 if slot_w > 0 and cur_row_x + slot_w > _MAX_ROW_WIDTH:
                     cur_row += 1
                     cur_row_x = 0
