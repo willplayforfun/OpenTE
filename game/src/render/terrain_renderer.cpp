@@ -3,30 +3,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <fstream>
 #include <iterator>
 #include <utility>
-
-#include <nlohmann/json.hpp>
 
 #include "render/iso.h"
 
 namespace opente::render {
 
 namespace {
-
-/// `tables/terrain_textures.json`'s path, relative to `game_data/` 
-/// (written by `tools/extractor/sprites/terrain.py`)
-constexpr const char* kTerrainTexturesTablePath = "tables/terrain_textures.json";
-
-/// Shore-overlay atlas sprite ids
-constexpr const char* kShoreAtlasSpriteIds[2] = {"terrain.coa0", "terrain.coa1"};
-
-/// Map-edge skirt texture sprite id
-constexpr const char* kEdgeSpriteId = "terrain.edge";
-
-/// Starfield background texture sprite id
-constexpr const char* kHiddSpriteId = "terrain.hidd";
 
 /// Palette-field 4cc labels for texture indices 0-13 (generic names from the
 /// original `terr/sets` palette structure, not culture-specific resolved tags).
@@ -55,8 +39,7 @@ constexpr float kSkirtUPeriod = 8.0f;
 constexpr int kQuadIndices[6] = {0, 1, 2, 0, 2, 3};
 
 /// 4-triangle fan winding for diamond terrain tiles: vertex 0 is the tile
-/// center, vertices 1-4 are the NW/NE/SE/SW corners.  Matches the original's
-/// D3DPT_TRIANGLEFAN(6 verts) geometry (center + 4 corners + closing repeat).
+/// center, vertices 1-4 are the NW/NE/SE/SW corners.
 constexpr int kFanIndices[12] = {0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1};
 
 /// 8-direction neighbor offsets, `world-and-maps.md` order:
@@ -64,43 +47,16 @@ constexpr int kFanIndices[12] = {0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1};
 constexpr int kDirDx[8] = {-1, 0, 1, 1, 1, 0, -1, -1};
 constexpr int kDirDy[8] = {-1, -1, -1, 0, 1, 1, 1, 0};
 
-/// Stage B: the `tran` edge-blend atlas is a 4x4-cell grid of 64x64px
-/// dithered-dissolve cells in a 256x256 atlas, cell selection addressed with
-/// a half-texel inset on each edge (B15 Round 40: `u_near = (cell*64 +
-/// 0.5)/256`, `u_far = u_near + 63/256`).  The EXE samples the full cell;
-/// a previous "half-cell" tweak was caused by confounding UV-interpolation
-/// artifacts from the missing center vertex (see kFanIndices).
+/// UV cell size and half-texel edge inset for sampling the edge-blend dissolve atlas without bleeding into adjacent cells.
 constexpr float kTranCellUV = 64.0f / 256.0f;
 constexpr float kTranInsetUV = 0.5f / 256.0f;
 
-/// Stage B uses the same kFanIndices as the base pass (center + 4 corners).
-
-/// Stage B: the 4 edge-blend directions, in `world-and-maps.md`'s 8-direction
-/// order (1=N, 3=E, 5=S, 7=W -- the cardinal directions of `0x42acf0`'s
-/// `for (dir = 1; dir < 8; dir += 2)` loop), and the per-direction cell-corner
-/// rotation index `k` used by `m = (j - k) mod 4` (tile corner `j`,
-/// NW=0,NE=1,SE=2,SW=3, gets `tran`-cell corner `corner_u/corner_v[m]`, where
-/// `corner_u/v[m]` for m=0..3 is `(u1,v1),(u0,v1),(u0,v0),(u1,v0)` -- see
-/// `render_edge_blends`).
-///
-/// The raw disassembly of `0x42acf0` (`exe_blend_draw_dump.txt`, offsets
-/// 0x42ae0b-0x42aec3) gives `k_raw = ((dir+1)&7)>>1` = `{1,2,3,0}` for
-/// dirs {1,3,5,7} (N,E,S,W) -- this assumes the EXE's 4-corner vertex slots
-/// 1-4 map onto screen corners NW,NE,SE,SW in that same order (`j` =
-/// vertex-slot index directly). 2026-06-13 visual checks found `k_raw`
-/// rotated 90 degrees from correct, and the first correction tried
-/// (`k_raw - 1 = {0,1,2,3}`) was off by 90 degrees the *other* way.
-/// `kEdgeBlendK` below (`k_raw + 1 mod 4 = {2,3,0,1}`) is the value that
-/// renders correctly -- i.e. vertex slot `v` corresponds to screen corner
-/// `j=(v-1) mod 4`, which folds into `m=(j-k)mod4` as `k_eff = k_raw + 1`.
+/// The 4 edge-blend directions, in `world-and-maps.md`'s 8-direction
+/// order (1=N, 3=E, 5=S, 7=W -- see `render_edge_blends`).
 constexpr int kEdgeBlendDirs[4] = {1, 3, 5, 7};
 constexpr int kEdgeBlendK[4] = {2, 3, 0, 1};
 
-/// Stage C.2: 8-bit water-neighbor mask (bit `d` set iff direction-`d`
-/// neighbor is water-class, `texture_index <= 2`) -> overlay1 cell code.
-/// `255` = no overlay. `0-52` index `terrain.coa0`'s cells via
-/// `kShoreUvIndex`; `53-59` index `terrain.coa1`'s cells `0-6`
-/// (`exe_b15_round37_shore_tables.txt`, LUT0).
+/// Picks which shore-edge sprite to draw based on which of a tile's 8 neighbors are water. 255 means draw nothing.
 constexpr Uint8 kShoreLUT0[256] = {
     15, 15, 15, 49, 15, 15, 50, 36, 15, 15, 15, 28, 51, 51, 16, 28,
     15, 15, 15, 49, 15, 15, 50, 36, 52, 52, 33, 24, 37, 37, 33, 24,
@@ -120,18 +76,7 @@ constexpr Uint8 kShoreLUT0[256] = {
     30, 26, 47, 47, 30, 26, 43, 43, 23, 58, 255, 255, 46, 42, 255, 255,
 };
 
-/// Stage C.3: corner water-flags (sum of `1 << corner_dir` for
-/// `corner_dir` in {0=NW,2=NE,4=SE,6=SW} where that corner neighbor is
-/// water-class) -> `dl` index, keyed by `flags - 1` (`flags == 0` means no
-/// corner is water, so overlay2 is skipped before indexing). `15` = no
-/// overlay2 (LUT85).
-/// All 85 entries (`0x42b5a0`); 17 per row.  The non-`15` entries land at
-/// `flags-1` for every valid `flags` (a subset-sum of {1,4,16,64}), i.e.
-/// indices {0,3,4,15,16,19,20,63,64,67,68,79,80,83,84} -- the second group
-/// (>=63, the combinations involving the 0x40/SW-corner flag) MUST stay at
-/// those exact indices.  A previous transcription dropped two `15`s from the
-/// middle run, shifting the whole tail left by 2 (and zero-filling 83/84),
-/// which mis-selected overlay2 cells for SW-corner concave configs.
+/// Picks a concave-corner shore sprite based on which diagonal (corner) neighbors are water. 15 means draw nothing.
 constexpr Uint8 kShoreLUT85[85] = {
      0, 15, 15,  1,  2, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,  3,  4,
     15, 15,  5,  6, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
@@ -140,23 +85,10 @@ constexpr Uint8 kShoreLUT85[85] = {
     10, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 11, 12, 15, 15, 13, 14,
 };
 
-/// Stage C.3: `dl` (0-14) -> `shape` (0-14), indexing the first 15 cells of
-/// `kShoreUvIndex`.  These are the `shape` values the EXE's overlay2 jump
-/// table at `0x42b560` sets for each `dl`: `jt[dl]` -> `mov [shape], <imm>`.
-/// IMPORTANT: index by `dl` *through the jump table*, NOT by the cases'
-/// memory order -- `0x42b560` does not list its targets in address order, so
-/// reading the `mov [shape],imm` stubs sequentially gives a *scrambled*
-/// table.  The earlier `{1,2,3,0,5,4,6,9,8,7,...}` was exactly that mistake
-/// (it's the cases in address order), which mis-selected the concave-corner
-/// shape -- e.g. `dl=3` (water spike at the S vertex) drew shape 0, a
-/// W-facing cell, instead of shape 3.
+/// Translates the corner-overlay index from kShoreLUT85 into a sprite cell for the concave-corner overlay.
 constexpr int kShoreDlToShape[15] = {1, 2, 7, 3, 5, 9, 11, 0, 6, 4, 10, 8, 13, 12, 14};
 
-/// Stage C.3: 53-cell UV-index array (`exe_b15_round37_shore_tables.txt`,
-/// "UV-index array @ 0x5f8940"). Each `(idx0, idx1)` is an index into the
-/// float-constant array at `0x5f88f0` (`shore_uv` below); cells 0-14
-/// are the `shape` cells used by overlay2, the full 53 are used by
-/// overlay1's `kShoreLUT0` codes 0-52.
+/// UV coordinates for each sprite cell in the shore overlay atlas, used by both edge and corner overlays.
 constexpr std::pair<int, int> kShoreUvIndex[53] = {
     {2, 1},   {6, 1},   {10, 1},  {14, 1},  {4, 2},   {8, 2},   {12, 2},
     {2, 3},   {6, 3},   {10, 3},  {14, 3},  {4, 4},   {8, 4},   {12, 4},
@@ -168,57 +100,9 @@ constexpr std::pair<int, int> kShoreUvIndex[53] = {
     {2, 15},  {6, 15},  {10, 15}, {14, 15},
 };
 
-/// Shore-atlas UV float array (`0x5f88f0`): `float[k] = (k - 2) / 16` for
-/// `k >= 2`, `~0` for `k < 2`.  Each cell in the atlas is a 64x32-pixel
-/// isometric DIAMOND (U span = 4/16 = 0.25, V span = 2/16 = 0.125), laid out
-/// in a staggered brick grid.  For a cell with `kShoreUvIndex` = `(idx0, idx1)`:
-///   LEFT_U  = float_arr[idx0]   = (idx0 - 2) / 16
-///   MID_U   = float_arr[idx0+2] = idx0 / 16
-///   RIGHT_U = float_arr[idx0+4] = (idx0 + 2) / 16
-///   TOP_V   = float_arr[idx1+1] = (idx1 - 1) / 16
-///   MID_V   = float_arr[idx1+2] = idx1 / 16
-///   BOT_V   = float_arr[idx1+3] = (idx1 + 1) / 16
-/// The 4-corner quad maps: NW=(MID_U,TOP_V), NE=(RIGHT_U,MID_V),
-///                          SE=(MID_U,BOT_V), SW=(LEFT_U,MID_V).
+/// Converts a raw atlas index into the UV float value used to sample a shore overlay sprite.
 constexpr float shore_uv(int raw_idx) {
     return raw_idx <= 2 ? 0.0f : static_cast<float>(raw_idx - 2) / 16.0f;
-}
-
-/// Returns a 2× wide + 2× tall render-target texture tiling `src` in a 2×2
-/// grid. The terrain UV formulas index this wider range so that UVs slightly
-/// outside [0,1] (SW corner goes to −1/8 in U; SE/NE go to 1+1/8 in V) land
-/// in the adjacent copy instead of clamping. SDL2 sets GL_CLAMP_TO_EDGE on
-/// every texture it creates, so GL_REPEAT is not available; this is the
-/// portable alternative.
-Texture make_tiled(SDL_Renderer* renderer, const Texture& src) {
-    if (!src.valid()) return Texture{};
-    const int w = src.width();
-    const int h = src.height();
-
-    Uint32 fmt = SDL_PIXELFORMAT_RGBA8888;
-    SDL_QueryTexture(src.handle(), &fmt, nullptr, nullptr, nullptr);
-
-    SDL_Texture* tiled = SDL_CreateTexture(renderer, fmt,
-                                           SDL_TEXTUREACCESS_TARGET, w * 2, h * 2);
-    if (tiled == nullptr) return Texture{};
-
-    // Temporarily use BLENDMODE_NONE on the source so alpha is copied
-    // directly (not pre-multiplied into RGB by alpha-blending).
-    SDL_BlendMode orig_blend;
-    SDL_GetTextureBlendMode(src.handle(), &orig_blend);
-    SDL_SetTextureBlendMode(src.handle(), SDL_BLENDMODE_NONE);
-
-    SDL_SetRenderTarget(renderer, tiled);
-    for (int row = 0; row < 2; ++row) {
-        for (int col = 0; col < 2; ++col) {
-            const SDL_Rect dst = {col * w, row * h, w, h};
-            SDL_RenderCopy(renderer, src.handle(), nullptr, &dst);
-        }
-    }
-    SDL_SetRenderTarget(renderer, nullptr);
-
-    SDL_SetTextureBlendMode(src.handle(), orig_blend);
-    return Texture::from_raw(tiled);
 }
 
 }  // namespace
@@ -230,20 +114,13 @@ TerrainRenderer::TerrainRenderer(SDL_Renderer* renderer, const world::Region& re
     const int vw = width + 1;  // num verts along width
     const int vh = height + 1; // num verts along height
 
-    // Per the original game's EXE: GetTerrainHeight (fcn.004650f0) returns
-    // raw alti_byte with no terrain-type check — water tiles use raw altitude
-    // like everything else.  The altitude data is naturally smooth at
-    // coastlines (max ~3 units between adjacent water tiles), so no override
-    // is needed; the sea_level() override we had before actually *created*
-    // visible cliffs by yanking coastal water tiles down to the map minimum.
     auto tile_height = [&](int tx, int ty) -> float {
         tx = std::clamp(tx, 0, width - 1);
         ty = std::clamp(ty, 0, height - 1);
         return static_cast<float>(region_->height_at(tx, ty));
     };
 
-    // Per the original game's EXE (virtual_252 via bilinear sampler
-    // fcn.00463420): each vertex at integer grid position gets its height
+    // Each vertex at integer grid position gets its height
     // from the single tile at that coordinate — no 4-tile averaging.
     // Smooth visual appearance comes from slope-based vertex shading
     // (8-neighbor normals), not height smoothing.
@@ -261,10 +138,7 @@ void TerrainRenderer::rebuild_vertex_colors() {
     const int vw = region_->width() + 1;   // num verts along width
     const int vh = region_->height() + 1;  // num verts along height
 
-    // Per-vertex slope shading: 8-neighbor cross-product normal, per-channel
-    // ambient (EXE-confirmed from TMapView virtual_252 @ 0x468b50). Reads the
-    // mutable render::kSlopeGradientScale/kAmbient*/kVertexColorScale globals,
-    // so re-running this after they change re-tints the mesh in place.
+    // Per-vertex slope shading: 8-neighbor cross-product normal, per-channel ambient.
     auto vertex_height = [&](int col, int row) -> float {
         col = std::clamp(col, 0, vw - 1);
         row = std::clamp(row, 0, vh - 1);
@@ -276,7 +150,7 @@ void TerrainRenderer::rebuild_vertex_colors() {
         for (int col = 0; col < vw; ++col) {
             const float hc = vertex_height(col, row);
 
-            // 8 direction vectors (kDirDx/kDirDy order: NW,N,NE,E,SE,S,SW,W).
+            // 8 direction vectors (kDirDx/kDirDy order).
             Vec3 dirs[8];
             for (int d = 0; d < 8; ++d) {
                 const float hn = vertex_height(col + kDirDx[d], row + kDirDy[d]);
@@ -314,81 +188,8 @@ void TerrainRenderer::rebuild_vertex_colors() {
     }
 }
 
-void TerrainRenderer::load_textures(const std::filesystem::path& game_data_dir,
-                                     const data::DataRegistry& registry) {
-    const std::filesystem::path table_path = game_data_dir / kTerrainTexturesTablePath;
-    std::ifstream file(table_path);
-    if (!file) {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "No '%s' found -- terrain will render untextured.",
-                     table_path.string().c_str());
-        return;
-    }
-
-    nlohmann::json j;
-    file >> j;
-    const std::vector<std::string> pages = j.value("pages", std::vector<std::string>{});
-
-    auto find_sprite_file = [&](const std::string& sprite_id) -> std::optional<std::filesystem::path> {
-        for (const data::SpriteEntry& sprite : registry.manifest().sprites) {
-            if (sprite.id == sprite_id) {
-                return game_data_dir / sprite.file;
-            }
-        }
-        return std::nullopt;
-    };
-
-    for (std::size_t i = 0; i < pages.size() && i < terrain_page_textures_.size() - 1; ++i) {
-        if (pages[i].empty()) {
-            continue;
-        }
-        if (const std::optional<std::filesystem::path> path = find_sprite_file(pages[i])) {
-            const Texture src = Texture::load(renderer_, *path);
-            terrain_page_textures_[i + 1] = make_tiled(renderer_, src);
-            if (terrain_page_textures_[i + 1].valid()) {
-                // Terrain tiles are fully opaque; BLENDMODE_NONE avoids SDL2
-                // auto-applying BLEND from the PNG alpha channel.
-                SDL_SetTextureBlendMode(terrain_page_textures_[i + 1].handle(),
-                                        SDL_BLENDMODE_NONE);
-            }
-        }
-    }
-
-    for (std::size_t i = 0; i < shore_atlas_textures_.size(); ++i) {
-        if (const std::optional<std::filesystem::path> path = find_sprite_file(kShoreAtlasSpriteIds[i])) {
-            shore_atlas_textures_[i] = Texture::load(renderer_, *path);
-            if (shore_atlas_textures_[i].valid()) {
-                SDL_SetTextureBlendMode(shore_atlas_textures_[i].handle(), SDL_BLENDMODE_BLEND);
-            }
-        }
-    }
-
-    const std::string tran_sprite_id = j.value("tran", std::string{});
-    if (!tran_sprite_id.empty()) {
-        if (const std::optional<std::filesystem::path> path = find_sprite_file(tran_sprite_id)) {
-            tran_atlas_texture_ = Texture::load(renderer_, *path);
-            if (tran_atlas_texture_.valid()) {
-                SDL_SetTextureBlendMode(tran_atlas_texture_.handle(), SDL_BLENDMODE_BLEND);
-            }
-        }
-    }
-
-    if (const std::optional<std::filesystem::path> path = find_sprite_file(kEdgeSpriteId)) {
-        edge_texture_ = Texture::load(renderer_, *path);
-        if (edge_texture_.valid()) {
-            SDL_SetTextureBlendMode(edge_texture_.handle(), SDL_BLENDMODE_BLEND);
-        }
-    }
-
-    const std::string hidd_sprite_id = j.value("hidd", std::string{});
-    if (!hidd_sprite_id.empty()) {
-        if (const std::optional<std::filesystem::path> path = find_sprite_file(hidd_sprite_id)) {
-            const Texture src = Texture::load(renderer_, *path);
-            hidd_texture_ = make_tiled(renderer_, src);
-            if (hidd_texture_.valid()) {
-                SDL_SetTextureBlendMode(hidd_texture_.handle(), SDL_BLENDMODE_NONE);
-            }
-        }
-    }
+void TerrainRenderer::set_tileset(const TerrainTileset* tileset) {
+    tileset_ = tileset;
 }
 
 int TerrainRenderer::texture_index_at(int tx, int ty) const {
@@ -411,16 +212,12 @@ void TerrainRenderer::render(const Camera& camera) const {
     const int vw = width + 1;
 
     // Render the terrain as a per-vertex height-displaced, slope-shaded mesh
-    // (B15 Rounds 31-37): each tile is a quad whose 4 corners are shared
+    // Each tile is a quad whose 4 corners are shared
     // vertices from `terrain_vertex_height_`/`terrain_vertex_color_`, so
-    // adjacent tiles' edges always coincide (smooth slopes -- steep height
-    // differences between interior tiles just become steep quads; the
-    // map-edge skirt is a separate pass rendered before this loop).
+    // adjacent tiles' edges always coincide.
     //
     // UV mapping: screen-axis-aligned "diamond" UV, where U varies along the
     // screen-horizontal axis (tx-ty) and V along the screen-depth axis (tx+ty).
-    // This matches the orientation of the coast-sprite water art: constant-V
-    // lines run horizontally on screen, just as the shore-overlay atlas cells do.
     //
     // Per-corner offsets (du, dv) relative to the tile's NW-corner base:
     //   NW (dc=0,dr=0): du=0,  dv=0
@@ -431,16 +228,13 @@ void TerrainRenderer::render(const Camera& camera) const {
     //
     // SDL2 sets GL_CLAMP_TO_EDGE on every texture (no GL_REPEAT), so raw UVs
     // outside [0,1] must be avoided. The terrain page textures are 2×-wide +
-    // 2×-tall tiled copies (built in load_textures via make_tiled), so the
+    // 2×-tall tiled copies (built by TerrainTileset::load), so the
     // safe addressable range is wider.  The UV formulas are:
     //
     //   u_tex = (u_raw + 1.0) * 0.5    // u_raw ∈ [-1/8, 1] → u_tex ∈ [7/16, 1]
     //   v_tex = v_raw * 0.5             // v_raw ∈ [0, 1+2/16] → v_tex ∈ [0, ~0.56]
     //
-    // No fmod or per-quad conditionals needed.
-    //
-    // Corner order is fixed as NW, NE, SE, SW for every pass below (base,
-    // Stage C shore overlays).
+    // Corner order is fixed as NW, NE, SE, SW for every pass below.
     static constexpr int kCornerCol[4] = {0, 1, 1, 0};
     static constexpr int kCornerRow[4] = {0, 0, 1, 1};
     static constexpr float kUPeriod = 8.0f;
@@ -461,10 +255,7 @@ void TerrainRenderer::render(const Camera& camera) const {
             const float u_nw = std::fmod(static_cast<float>(tx - ty) + kUPeriod * 1000.0f, kUPeriod) / kUPeriod;
             const float v_nw = std::fmod(static_cast<float>(tx + ty) + kVPeriod * 1000.0f, kVPeriod) / kVPeriod;
 
-            // 5-vertex fan: verts[0] = tile center, verts[1..4] = NW/NE/SE/SW
-            // corners.  Matches the original's D3DPT_TRIANGLEFAN geometry
-            // (center + 4 corners + closing repeat = 4 triangles through the
-            // center, avoiding the diagonal-seam artifact of a 2-triangle split).
+            // 5-vertex fan: verts[0] = tile center, verts[1..4] = NW/NE/SE/SW corners.
             SDL_Vertex verts[5];
             for (int c = 0; c < 4; ++c) {
                 const int col = tx + kCornerCol[c];
@@ -489,11 +280,16 @@ void TerrainRenderer::render(const Camera& camera) const {
                     (v_nw + static_cast<float>(kCornerCol[c] + kCornerRow[c]) / kVPeriod) * 0.5f};
             }
 
-            // Center vertex height: average of the 4 corner vertex heights
-            // (the NW corner vertex index for this tile is ty*vw+tx).
+            // Center vertex height: bilinear interpolation at (tx+0.5, ty+0.5)
+            // = average of the 4 corner vertex heights, matching the original
+            // game's bilinear sampler (fcn.00463420) at non-integer positions.
             {
+                const std::size_t nw = static_cast<std::size_t>(ty) * vw + tx;
                 const float center_h_offset =
-                    terrain_vertex_height_[static_cast<std::size_t>(ty) * vw + tx]
+                    (terrain_vertex_height_[nw] +
+                     terrain_vertex_height_[nw + 1] +
+                     terrain_vertex_height_[nw + vw] +
+                     terrain_vertex_height_[nw + vw + 1]) * 0.25f
                     * kPixelsPerAltiUnit;
                 Vec2 center_world = tile_to_world(
                     static_cast<float>(tx) + 0.5f,
@@ -514,25 +310,22 @@ void TerrainRenderer::render(const Camera& camera) const {
             // Center UV: at (tx+0.5, ty+0.5), u_raw = u_nw, v_raw = v_nw + 1/kV.
             verts[0].tex_coord = {(u_nw + 1.0f) * 0.5f, (v_nw + 1.0f / kVPeriod) * 0.5f};
 
-            // Base pass (Stage A.5 / E): the tile's own texture page, or flat
-            // slope-shaded color if textures are disabled.
-            if (terrain_page_textures_[own_index].valid()) {
-                SDL_RenderGeometry(renderer_, terrain_page_textures_[own_index].handle(), verts, 5, kFanIndices, 12);
-            } else {
-                SDL_RenderGeometry(renderer_, nullptr, verts, 5, kFanIndices, 12);
-            }
+            // Base pass: the tile's own texture page, or flat slope-shaded color if textures are disabled / no tileset set.
+            SDL_RenderGeometry(renderer_,
+                               tileset_ ? tileset_->page(own_index) : nullptr,
+                               verts, 5, kFanIndices, 12);
 
-            // Stage B: edge-blend passes between same-class,
-            // differently-textured neighboring tiles.
+            // Edge-blend passes between same-class, differently-textured neighboring tiles.
             if (terrain_blending_enabled) {
                 render_edge_blends(tx, ty, verts + 1);
             }
 
-            // Stage C: shore-overlay passes at water/land boundaries.
+            // Shore-overlay passes at water/land boundaries.
             if (shore_overlays_enabled) {
                 render_shore_overlays(tx, ty, verts + 1);
             }
 
+            // DEBUG-only visualization
             if (terrain_debug_labels_enabled && own_index >= 0 && own_index < 14) {
                 const char* label = kTerrainIndexLabels[own_index];
                 if (label[0] != '\0') {
@@ -550,14 +343,14 @@ void TerrainRenderer::render(const Camera& camera) const {
 }
 
 void TerrainRenderer::render_edge_blends(int tx, int ty, const SDL_Vertex corners[4]) const {
-    if (!tran_atlas_texture_.valid()) {
+    if (!tileset_ || !tileset_->tran()) {
         return;
     }
 
     const int own_index = texture_index_at(tx, ty);
     const bool own_is_water = own_index <= 2;
 
-    // B.2: for each of the 4 cardinal directions, queue an edge-blend pass
+    // For each of the 4 cardinal directions, queue an edge-blend pass
     // if the neighbor is in the same water/land class but uses a different
     // texture page. Map-edge tiles (no neighbor) are skipped.
     for (int i = 0; i < 4; ++i) {
@@ -573,8 +366,7 @@ void TerrainRenderer::render_edge_blends(int tx, int ty, const SDL_Vertex corner
             continue;
         }
 
-        // B.3: UV rect for the `tran` atlas cell, full 64px cell with
-        // half-texel inset (EXE: u_far = u_near + 63/256).
+        // UV rect for the `tran` atlas cell
         const int cell_col = nbr_index & 3;
         const int cell_row = nbr_index >> 2;
         const float u0 = static_cast<float>(cell_col) * kTranCellUV + kTranInsetUV;
@@ -590,7 +382,6 @@ void TerrainRenderer::render_edge_blends(int tx, int ty, const SDL_Vertex corner
         const int k = kEdgeBlendK[i];
 
         // 5-vertex triangle fan: V0=center, V1..V4=NW/NE/SE/SW corners.
-        // Matches the EXE's D3DPT_TRIANGLEFAN(6 verts) geometry exactly.
         SDL_Vertex fan[5];
         fan[0].position = {
             (corners[0].position.x + corners[1].position.x +
@@ -605,27 +396,20 @@ void TerrainRenderer::render_edge_blends(int tx, int ty, const SDL_Vertex corner
             fan[1 + j].color = corners[j].color;
             fan[1 + j].tex_coord = {corner_u[m], corner_v[m]};
         }
-        SDL_RenderGeometry(renderer_, tran_atlas_texture_.handle(),
+        SDL_RenderGeometry(renderer_, tileset_->tran(),
                            fan, 5, kFanIndices, 12);
     }
 }
 
 void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex corners[4]) const {
-    // Each shore-atlas cell is a 64x32 px diamond in a staggered grid.
-    // The UV mapping places diamond vertices at the 4 quad corners:
-    //   corners[0] NW (screen top)   -> (MID_U,  TOP_V)
-    //   corners[1] NE (screen right) -> (RIGHT_U, MID_V)
-    //   corners[2] SE (screen bottom)-> (MID_U,  BOT_V)
-    //   corners[3] SW (screen left)  -> (LEFT_U,  MID_V)
-    auto draw_overlay = [&](const Texture& atlas, int cell) {
-        if (!atlas.valid() || cell < 0 || cell >= static_cast<int>(std::size(kShoreUvIndex))) {
+    SDL_Texture* sh0 = tileset_ ? tileset_->shore(0) : nullptr;
+    SDL_Texture* sh1 = tileset_ ? tileset_->shore(1) : nullptr;
+
+    auto draw_overlay = [&](SDL_Texture* atlas, int cell) {
+        if (!atlas || cell < 0 || cell >= static_cast<int>(std::size(kShoreUvIndex))) {
             return;
         }
-        // Half-texel insets (EXE `0x42acf0`): the sampled diamond is squeezed
-        // inward so the staggered atlas neighbours don't bleed a 1-2px seam
-        // along each cell edge.  `0x5f8cd4 = 1/128` (2 texels) on left/right U,
-        // `0x5f8ccc = 1/256` (1 texel) on top/bottom V, `0x5f8cd0 = 0.002`
-        // biases the shared mid-V (centre + left/right verts) down.
+        // Small UV insets and a vertical nudge to prevent neighboring atlas cells from bleeding into the seams.
         constexpr float kShoreInsetU = 1.0f / 128.0f;
         constexpr float kShoreInsetV = 1.0f / 256.0f;
         constexpr float kShoreMidVBias = 0.002f;
@@ -653,23 +437,15 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
         fan[2].tex_coord = {right_u, mid_v};    // NE = screen right
         fan[3].tex_coord = {mid_u,   bot_v};    // SE = screen bottom
         fan[4].tex_coord = {left_u,  mid_v};    // SW = screen left
-        SDL_RenderGeometry(renderer_, atlas.handle(), fan, 5, kFanIndices, 12);
+        SDL_RenderGeometry(renderer_, atlas, fan, 5, kFanIndices, 12);
     };
 
-    // Shore overlays are only drawn on land tiles.  The EXE gates via
-    // `[ebx+0x24b]` (beaches toggle) AND `0x463b60` which returns
-    // `(raw_mapp_terr >> 6) & 1` — i.e. bit 6 of the raw terrain byte.
-    // In the extractor's band mapping, raw >= 64 (bit 6 set) maps to
-    // TerrainType::Mountains or higher, so the equivalent check is:
+    // Shore overlays only appear on land tiles, not water.
     if (region_->terrain_at(tx, ty) < world::TerrainType::Mountains) {
         return;
     }
 
-    // Build the 8-direction shore mask matching the EXE's convention:
-    // start at 0xFF, CLEAR bits where the neighbor's terrain type == 2
-    // (shore water).  bit=1 → neighbor is NOT shore-water.
-    // OOB neighbors use type 0 (not water), matching the EXE's BSS default
-    // at VA 0x6470b0 — the bit stays SET (land).
+    // Build a bitmask of which of the 8 neighbors are shore-water (cleared bits = water neighbor).
     const int w = region_->width();
     const int h = region_->height();
     int mask = 0xFF;
@@ -685,29 +461,17 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
         return;
     }
 
-    // EXE draw order (`0x42acf0`): the directional overlay1 (LUT0) is drawn
-    // FIRST (at 0x42b07d), then the concave-corner overlay2 (shape) on top
-    // (at 0x42b16d).  56 of 256 masks produce both; the later draw wins where
-    // they overlap, so order matters — a previous version had these reversed.
-
-    // Overlay pass 1 — directional shore edge (C.2), drawn first.
+    // Draw the shore-edge sprite first, then the concave-corner sprite on top.
     const Uint8 overlay1 = kShoreLUT0[mask];
     if (overlay1 != 255) {
         if (overlay1 <= 52) {
-            draw_overlay(shore_atlas_textures_[0], overlay1);
+            draw_overlay(sh0, overlay1);
         } else {
-            draw_overlay(shore_atlas_textures_[1], overlay1 - 53);
+            draw_overlay(sh1, overlay1 - 53);
         }
     }
 
-    // Overlay pass 2 — concave-corner flags (C.3), drawn second (on top).
-    // Mask uses NOT-water bits (set=land, clear=water).  A corner flag fires
-    // when the diagonal IS water (bit clear) but both adjacent cardinals are
-    // NOT water (bits set) — a water tile poking diagonally into land.
-    //   NW corner: (mask & 0x83) == 0x82  (NW water, N+W not)
-    //   NE corner: (mask & 0x0E) == 0x0A  (NE water, N+E not)
-    //   SE corner: (mask & 0x38) == 0x28  (SE water, E+S not)
-    //   SW corner: (mask & 0xE0) == 0xA0  (SW water, S+W not)
+    // A corner flag fires when a diagonal neighbor is water but both adjacent cardinal neighbors are not.
     int flags = 0;
     if ((mask & 0x83) == 0x82) flags |= 0x01;
     if ((mask & 0x0E) == 0x0A) flags |= 0x04;
@@ -716,7 +480,7 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
     if (flags != 0) {
         const Uint8 dl = kShoreLUT85[flags - 1];
         if (dl != 15) {
-            draw_overlay(shore_atlas_textures_[0], kShoreDlToShape[dl]);
+            draw_overlay(sh0, kShoreDlToShape[dl]);
         }
     }
 }
@@ -728,7 +492,7 @@ void TerrainRenderer::render_skirts(const Camera& camera) const {
     const float sea_height = static_cast<float>(region_->sea_level());
     const float bottom_height = std::max(0.0f, sea_height - kSkirtExtension);
 
-    SDL_Texture* tex = edge_texture_.valid() ? edge_texture_.handle() : nullptr;
+    SDL_Texture* tex = tileset_ ? tileset_->edge() : nullptr;
 
     // World-pixel diagonal of one isometric edge segment (same for south
     // and east edges): sqrt((W/2)^2 + (H/2)^2).
@@ -820,7 +584,7 @@ void TerrainRenderer::render_skirts(const Camera& camera) const {
 }
 
 void TerrainRenderer::render_background(const Camera& camera) const {
-    if (!hidd_texture_.valid()) {
+    if (!tileset_ || !tileset_->hidd()) {
         return;
     }
 
@@ -895,7 +659,7 @@ void TerrainRenderer::render_background(const Camera& camera) const {
             verts[0].color = {255, 255, 255, 255};
             verts[0].tex_coord = {(u_nw + 1.0f) * 0.5f, (v_nw + 1.0f / kVPeriod) * 0.5f};
 
-            SDL_RenderGeometry(renderer_, hidd_texture_.handle(),
+            SDL_RenderGeometry(renderer_, tileset_->hidd(),
                                verts, 5, kFanIndices, 12);
         }
     }

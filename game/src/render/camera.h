@@ -1,8 +1,7 @@
 #pragma once
 
-// Camera: pan/zoom state for the world viewport. See
-// OpenTE/spec/rendering.md "Camera". Per-viewport UI state, not part of
-// World/Region.
+// Camera: pan/zoom state for the world viewport. See OpenTE/spec/rendering.md "Camera". 
+// Per-viewport state, not part of World/Region.
 
 #include "render/iso.h"
 

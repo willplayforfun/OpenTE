@@ -82,7 +82,16 @@ bool App::init(const std::filesystem::path& executable_path) {
               << world_->region().height() << ")" << std::endl;
 
     terrain_renderer_.emplace(renderer_, world_->region());
-    terrain_renderer_->load_textures(*game_data_dir, *registry_);
+    terrain_tileset_ = render::TerrainTileset::load(renderer_, *game_data_dir, *registry_);
+    terrain_renderer_->set_tileset(&terrain_tileset_.value());
+
+    // UI sprite IDs that need to be loaded for the construction panel skin.
+    static constexpr const char* kConsSpriteIds[] = {
+        "ui.a_ui.cons.back",
+        "ui.a_ui.cons.sele",
+        "ui.a_ui.cons.conf",
+        "ui.a_ui.cons.canc",
+    };
 
     for (const data::SpriteEntry& sprite : registry_->manifest().sprites) {
         if (sprite.id == kHqSpriteId) {
@@ -98,7 +107,49 @@ bool App::init(const std::filesystem::path& executable_path) {
             anchored.anchor_x = static_cast<float>(sprite.anchor_x);
             anchored.anchor_y = static_cast<float>(sprite.anchor_y);
             decoration_sprites_.emplace(sprite.id, std::move(anchored));
+            continue;
         }
+
+        for (const char* ui_id : kConsSpriteIds) {
+            if (sprite.id == ui_id) {
+                ui_textures_.emplace(sprite.id,
+                    render::Texture::load(renderer_, *game_data_dir / sprite.file));
+                break;
+            }
+        }
+    }
+
+    // Build ConsSkin from the loaded textures.  Any sprite that failed to load
+    // leaves its SkinSprite with tex=nullptr; ConsSkin::valid() fails if the
+    // background is missing, falling back to flat-colour rendering.
+    auto make_skin_sprite = [&](const char* id, const data::SpriteEntry* entry) -> ui::SkinSprite {
+        auto it = ui_textures_.find(id);
+        if (it == ui_textures_.end() || !it->second.valid() || entry == nullptr)
+            return {};
+        return {it->second.handle(), entry->width, entry->height,
+                entry->anchor_x, entry->anchor_y};
+    };
+
+    // Build a quick id->entry lookup for the cons sprites.
+    std::map<std::string, const data::SpriteEntry*> cons_entries;
+    for (const auto& s : registry_->manifest().sprites) {
+        for (const char* ui_id : kConsSpriteIds) {
+            if (s.id == ui_id) { cons_entries[s.id] = &s; break; }
+        }
+    }
+
+    cons_skin_.background   = make_skin_sprite("ui.a_ui.cons.back",
+                                                cons_entries.count("ui.a_ui.cons.back") ? cons_entries["ui.a_ui.cons.back"] : nullptr);
+    cons_skin_.selection    = make_skin_sprite("ui.a_ui.cons.sele",
+                                                cons_entries.count("ui.a_ui.cons.sele") ? cons_entries["ui.a_ui.cons.sele"] : nullptr);
+    cons_skin_.confirm_btn  = make_skin_sprite("ui.a_ui.cons.conf",
+                                                cons_entries.count("ui.a_ui.cons.conf") ? cons_entries["ui.a_ui.cons.conf"] : nullptr);
+    cons_skin_.cancel_btn   = make_skin_sprite("ui.a_ui.cons.canc",
+                                                cons_entries.count("ui.a_ui.cons.canc") ? cons_entries["ui.a_ui.cons.canc"] : nullptr);
+
+    if (!cons_skin_.valid()) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "cons panel sprites not found — build menu will use flat colours");
     }
 
     render_defaults_ = {
@@ -111,9 +162,8 @@ bool App::init(const std::filesystem::path& executable_path) {
         render::kPixelsPerWorldHeightUnit,
     };
 
-    // Initialise the UI manager.  Assets are looked up next to the executable.
-    const std::filesystem::path assets_dir = executable_path.parent_path() / "assets";
-    if (!ui_manager_.init(renderer_, assets_dir)) {
+    // Initialise the UI manager.  Font atlas is in game_data/fonts/.
+    if (!ui_manager_.init(renderer_, *game_data_dir)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "UIManager::init failed — cannot continue.");
         return false;
     }
@@ -329,12 +379,15 @@ void App::toggle_build_menu() {
     auto menu = std::make_unique<ui::BuildMenu>(
         registry_->buildings(),
         [this](const std::string& building_id) {
-            // TODO (Stage 2): enter placement mode for `building_id`.
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "Build menu selected: %s", building_id.c_str());
+            if (!building_id.empty()) {
+                // TODO (Stage 2): enter placement mode for `building_id`.
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "Build menu selected: %s", building_id.c_str());
+            }
             ui_manager_.close(build_menu_ptr_);
             build_menu_ptr_ = nullptr;
-        });
+        },
+        cons_skin_);
     build_menu_ptr_ = menu.get();
     ui_manager_.open(std::move(menu), win_w, win_h);
 }

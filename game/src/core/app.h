@@ -10,8 +10,10 @@
 #include "data/registry.h"
 #include "render/camera.h"
 #include "render/terrain_renderer.h"
+#include "render/terrain_tileset.h"
 #include "render/texture.h"
 #include "ui/manager.h"
+#include "ui/skin.h"
 #include "world/world.h"
 
 namespace opente::core {
@@ -56,11 +58,16 @@ private:
 
     std::optional<data::DataRegistry> registry_;
     std::optional<world::World> world_;
+    std::optional<render::TerrainTileset> terrain_tileset_;
     std::optional<render::TerrainRenderer> terrain_renderer_;
     render::Camera camera_;
     AnchoredSprite hq_sprite_;
 
     ui::UIManager ui_manager_;
+
+    /// UI sprites owned by App; ConsSkin holds borrowed pointers into this map.
+    std::map<std::string, render::Texture> ui_textures_;
+    ui::ConsSkin cons_skin_;
 
     /// Ground-decoration sprites, keyed by `data::SpriteEntry::id`
     /// (e.g. "flor.chin.3").
