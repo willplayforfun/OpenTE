@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "render/font.h"
+#include "render/font_cache.h"
 
 namespace opente::ui {
 
@@ -33,7 +34,7 @@ void Panel::layout(Rect bounds) {
     }
 }
 
-void Panel::render(SDL_Renderer* renderer, Font* font) const {
+void Panel::render(SDL_Renderer* renderer, FontCache& fonts) const {
     if (bg_.a > 0) {
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         SDL_SetRenderDrawColor(renderer, bg_.r, bg_.g, bg_.b, bg_.a);
@@ -41,7 +42,7 @@ void Panel::render(SDL_Renderer* renderer, Font* font) const {
         SDL_RenderFillRect(renderer, &r);
     }
     for (const auto& entry : children_) {
-        entry.widget->render(renderer, font);
+        entry.widget->render(renderer, fonts);
     }
 }
 
@@ -56,7 +57,8 @@ bool Panel::handle_event(const SDL_Event& e) {
 // Label
 // ---------------------------------------------------------------------------
 
-void Label::render(SDL_Renderer* renderer, Font* font) const {
+void Label::render(SDL_Renderer* renderer, FontCache& fonts) const {
+    Font* font = fonts.ui();
     if (font && !text_.empty()) {
         const int text_w = font->measure_text(text_.c_str());
         const int text_h = font->ascender() + font->descender();
@@ -88,7 +90,7 @@ void Button::layout(Rect bounds) {
     label_widget_.layout(bounds);
 }
 
-void Button::render(SDL_Renderer* renderer, Font* font) const {
+void Button::render(SDL_Renderer* renderer, FontCache& fonts) const {
     const SDL_Color& bg = pressed_ ? bg_pressed_ : (hovered_ ? bg_hover_ : bg_normal_);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, bg.r, bg.g, bg.b, bg.a);
@@ -98,7 +100,7 @@ void Button::render(SDL_Renderer* renderer, Font* font) const {
     SDL_SetRenderDrawColor(renderer, 120, 120, 160, 180);
     SDL_RenderDrawRect(renderer, &r);
 
-    label_widget_.render(renderer, font);
+    label_widget_.render(renderer, fonts);
 }
 
 bool Button::handle_event(const SDL_Event& e) {
@@ -135,10 +137,10 @@ void ScrollPanel::layout(Rect bounds) {
     }
 }
 
-void ScrollPanel::render(SDL_Renderer* renderer, Font* font) const {
+void ScrollPanel::render(SDL_Renderer* renderer, FontCache& fonts) const {
     SDL_Rect clip = bounds_.to_sdl();
     SDL_RenderSetClipRect(renderer, &clip);
-    if (content_) content_->render(renderer, font);
+    if (content_) content_->render(renderer, fonts);
     SDL_RenderSetClipRect(renderer, nullptr);
 
     if (content_height_ > bounds_.h) {

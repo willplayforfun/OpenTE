@@ -30,7 +30,7 @@ public:
     void add_child(std::unique_ptr<Widget> child, Rect local_rect);
 
     void layout(Rect bounds) override;
-    void render(SDL_Renderer* renderer, Font* font) const override;
+    void render(SDL_Renderer* renderer, FontCache& fonts) const override;
     bool handle_event(const SDL_Event& e) override;
 
 protected:
@@ -63,7 +63,7 @@ public:
     void set_text(std::string text) { text_ = std::move(text); }
     const std::string& text() const { return text_; }
 
-    void render(SDL_Renderer* renderer, Font* font) const override;
+    void render(SDL_Renderer* renderer, FontCache& fonts) const override;
     bool handle_event(const SDL_Event& /*e*/) override { return false; }
 
 private:
@@ -92,7 +92,7 @@ public:
           bg_pressed_(bg_pressed) {}
 
     void layout(Rect bounds) override;
-    void render(SDL_Renderer* renderer, Font* font) const override;
+    void render(SDL_Renderer* renderer, FontCache& fonts) const override;
     bool handle_event(const SDL_Event& e) override;
 
 private:
@@ -118,7 +118,7 @@ public:
         : content_(std::move(content)), content_height_(content_height) {}
 
     void layout(Rect bounds) override;
-    void render(SDL_Renderer* renderer, Font* font) const override;
+    void render(SDL_Renderer* renderer, FontCache& fonts) const override;
     bool handle_event(const SDL_Event& e) override;
 
     /// Scrolls so that a vertical range [top, bottom) is visible.

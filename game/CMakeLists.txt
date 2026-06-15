@@ -29,6 +29,7 @@ add_executable(opente
     src/gameplay/gameplay_scene.cpp
     src/data/registry.cpp
     src/render/font.cpp
+    src/render/font_cache.cpp
     src/render/terrain_renderer.cpp
     src/render/terrain_tileset.cpp
     src/render/texture.cpp
