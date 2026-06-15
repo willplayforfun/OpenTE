@@ -127,6 +127,7 @@ struct MapFile {
     std::string id;
     std::string name;
     std::string episode;
+    std::string culture_set;  // primary region's palette (e.g. "chi1", "eur1")
     int width = 0;
     int height = 0;
     TerrainData terrain;
@@ -142,6 +143,7 @@ inline void from_json(const nlohmann::json& j, MapFile& m) {
     m.id = j.value("id", "");
     m.name = j.value("name", "");
     m.episode = j.value("episode", "");
+    m.culture_set = j.value("culture_set", "");
     m.width = j.value("width", 0);
     m.height = j.value("height", 0);
     j.at("terrain").get_to(m.terrain);

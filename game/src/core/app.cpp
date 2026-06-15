@@ -14,7 +14,7 @@ namespace {
 constexpr int         kWindowWidth  = 1280;
 constexpr int         kWindowHeight = 720;
 constexpr const char* kWindowTitle  = "OpenTE";
-constexpr const char* kStartMapId   = "ep01_china";
+constexpr const char* kStartMapId   = "ep01_chin";
 }  // namespace
 
 bool App::init(const std::filesystem::path& executable_path) {

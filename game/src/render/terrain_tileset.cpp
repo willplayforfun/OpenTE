@@ -56,7 +56,8 @@ Texture make_tiled(SDL_Renderer* renderer, const Texture& src) {
 
 TerrainTileset TerrainTileset::load(SDL_Renderer* renderer,
                                     const std::filesystem::path& game_data_dir,
-                                    const data::DataRegistry& registry) {
+                                    const data::DataRegistry& registry,
+                                    const std::string& culture) {
     TerrainTileset ts;
 
     const std::filesystem::path table_path = game_data_dir / kTerrainTexturesTablePath;
@@ -70,7 +71,33 @@ TerrainTileset TerrainTileset::load(SDL_Renderer* renderer,
 
     nlohmann::json j;
     file >> j;
-    const std::vector<std::string> pages = j.value("pages", std::vector<std::string>{});
+
+    if (!j.contains("cultures")) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "'terrain_textures.json' has no 'cultures' key -- "
+                    "re-run the extractor. Terrain will render untextured.");
+        return ts;
+    }
+
+    const nlohmann::json& cultures = j["cultures"];
+    if (cultures.empty()) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "'terrain_textures.json' cultures table is empty.");
+        return ts;
+    }
+
+    // Select the requested culture, falling back to the first available one.
+    std::string eff_culture = culture;
+    if (!cultures.contains(culture)) {
+        eff_culture = cultures.begin().key();
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Culture '%s' not found in terrain_textures.json -- "
+                    "falling back to '%s'.",
+                    culture.c_str(), eff_culture.c_str());
+    }
+
+    const nlohmann::json& cj = cultures.at(eff_culture);
+    const std::vector<std::string> pages = cj.value("pages", std::vector<std::string>{});
 
     auto find_sprite_file = [&](const std::string& sprite_id)
         -> std::optional<std::filesystem::path> {
@@ -82,15 +109,17 @@ TerrainTileset TerrainTileset::load(SDL_Renderer* renderer,
         return std::nullopt;
     };
 
-    for (std::size_t i = 0; i < pages.size() && i < ts.pages_.size() - 1; ++i) {
+    // pages[0] is an empty sentinel; pages[N] (N=1..13) holds the sprite id
+    // for slot N -- so use i directly as the slot index, not i+1.
+    for (std::size_t i = 1; i < pages.size() && i < ts.pages_.size(); ++i) {
         if (pages[i].empty()) continue;
         if (const auto path = find_sprite_file(pages[i])) {
             const Texture src = Texture::load(renderer, *path);
-            ts.pages_[i + 1] = make_tiled(renderer, src);
-            if (ts.pages_[i + 1].valid()) {
+            ts.pages_[i] = make_tiled(renderer, src);
+            if (ts.pages_[i].valid()) {
                 // Terrain tiles are fully opaque; BLENDMODE_NONE avoids SDL2
                 // auto-applying BLEND from the PNG alpha channel.
-                SDL_SetTextureBlendMode(ts.pages_[i + 1].handle(), SDL_BLENDMODE_NONE);
+                SDL_SetTextureBlendMode(ts.pages_[i].handle(), SDL_BLENDMODE_NONE);
             }
         }
     }
@@ -104,7 +133,7 @@ TerrainTileset TerrainTileset::load(SDL_Renderer* renderer,
         }
     }
 
-    const std::string tran_sprite_id = j.value("tran", std::string{});
+    const std::string tran_sprite_id = cj.value("tran", std::string{});
     if (!tran_sprite_id.empty()) {
         if (const auto path = find_sprite_file(tran_sprite_id)) {
             ts.tran_ = Texture::load(renderer, *path);
@@ -121,7 +150,7 @@ TerrainTileset TerrainTileset::load(SDL_Renderer* renderer,
         }
     }
 
-    const std::string hidd_sprite_id = j.value("hidd", std::string{});
+    const std::string hidd_sprite_id = cj.value("hidd", std::string{});
     if (!hidd_sprite_id.empty()) {
         if (const auto path = find_sprite_file(hidd_sprite_id)) {
             const Texture src = Texture::load(renderer, *path);

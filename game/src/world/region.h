@@ -33,6 +33,7 @@ public:
     const std::string& id() const { return id_; }
     const std::string& name() const { return name_; }
     const std::string& episode() const { return episode_; }
+    const std::string& culture_set() const { return culture_set_; }
     int width() const { return width_; }
     int height() const { return height_; }
 
@@ -70,6 +71,7 @@ private:
     std::string id_;
     std::string name_;
     std::string episode_;
+    std::string culture_set_;
     int width_ = 0;
     int height_ = 0;
     std::vector<TerrainType> terrain_;  // row-major, width_ * height_

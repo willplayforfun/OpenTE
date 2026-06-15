@@ -16,12 +16,16 @@ namespace opente::render {
 
 class TerrainTileset {
 public:
-    /// Reads `tables/terrain_textures.json` from `game_data_dir` and loads all
-    /// terrain page textures, the `tran` edge-blend atlas, shore-overlay atlases,
-    /// edge skirt texture, and starfield background.
+    /// Reads `tables/terrain_textures.json` from `game_data_dir`, selects the
+    /// sub-table for `culture` (e.g. "chi1", "eur1"), and loads terrain page
+    /// textures, the `tran` edge-blend atlas, shore-overlay atlases, edge skirt
+    /// texture, and starfield background.  Falls back to the first available
+    /// culture if `culture` is not found; warns and returns untextured if the
+    /// file is missing or has no "cultures" key.
     static TerrainTileset load(SDL_Renderer* renderer,
                                const std::filesystem::path& game_data_dir,
-                               const data::DataRegistry& registry);
+                               const data::DataRegistry& registry,
+                               const std::string& culture);
 
     /// Terrain page texture for slot `idx` (1–13); null if not loaded.
     SDL_Texture* page(int idx) const;

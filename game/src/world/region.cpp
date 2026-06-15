@@ -132,6 +132,7 @@ Region Region::load(const std::filesystem::path& path) {
     region.id_ = map.id;
     region.name_ = map.name;
     region.episode_ = map.episode;
+    region.culture_set_ = map.culture_set;
     region.width_ = map.width;
     region.height_ = map.height;
     region.terrain_ = decode_terrain_rle(map.terrain.data, map.width, map.height);

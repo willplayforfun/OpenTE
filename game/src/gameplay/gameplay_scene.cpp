@@ -17,7 +17,6 @@ namespace {
 constexpr float kPanSpeed = 600.0f;  // world-pixels/sec at zoom 1.0
 constexpr float kZoomStep = 0.1f;
 
-constexpr const char* kHqSpriteId = "bldg.chi1.head";
 constexpr const char* kDecorationSpritePrefix = "flor.";
 
 constexpr const char* kConsSpriteIds[] = {
@@ -35,22 +34,6 @@ GameplayScene::GameplayScene(SDL_Window* window,
                              const std::string& map_id)
     : window_(window), renderer_(renderer), registry_(&registry)
 {
-    try {
-        world_ = world::World::load(registry, map_id);
-    } catch (const std::exception& e) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "GameplayScene: failed to load map '%s': %s",
-                     map_id.c_str(), e.what());
-        return;
-    }
-
-    std::cout << "Loaded map '" << world_->region().name() << "' ("
-              << world_->region().width() << "x" << world_->region().height() << ")\n";
-
-    terrain_renderer_.emplace(renderer_, world_->region());
-    terrain_tileset_ = render::TerrainTileset::load(renderer_, registry.game_data_dir(), registry);
-    terrain_renderer_->set_tileset(&terrain_tileset_.value());
-
     load_sprites();
 
     if (!ui_manager_.init(renderer_, registry.game_data_dir())) {
@@ -68,7 +51,58 @@ GameplayScene::GameplayScene(SDL_Window* window,
         render::kPixelsPerWorldHeightUnit,
     };
 
-    // Center the camera on the player's starting headquarters.
+    load_map(map_id);
+}
+
+void GameplayScene::load_map(const std::string& map_id) {
+    // Tear down current map state (releases GPU textures before reallocating).
+    if (terrain_renderer_) terrain_renderer_->set_tileset(nullptr);
+    terrain_renderer_.reset();
+    terrain_tileset_.reset();
+    world_.reset();
+    hq_sprite_ = {};
+
+    try {
+        world_ = world::World::load(*registry_, map_id);
+    } catch (const std::exception& e) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "GameplayScene: failed to load map '%s': %s",
+                     map_id.c_str(), e.what());
+        return;
+    }
+
+    current_map_id_ = map_id;
+
+    // Update selected_map_index_ to match the loaded map for the dev GUI listbox.
+    const auto& maps = registry_->manifest().maps;
+    for (int i = 0; i < static_cast<int>(maps.size()); ++i) {
+        if (maps[i].id == map_id) { selected_map_index_ = i; break; }
+    }
+
+    const std::string& culture = world_->region().culture_set();
+
+    std::cout << "Loaded map '" << world_->region().name()
+              << "' (culture: " << (culture.empty() ? "unknown" : culture)
+              << ", " << world_->region().width() << "x" << world_->region().height() << ")\n";
+
+    terrain_renderer_.emplace(renderer_, world_->region());
+    terrain_tileset_ = render::TerrainTileset::load(
+        renderer_, registry_->game_data_dir(), *registry_, culture);
+    terrain_renderer_->set_tileset(&terrain_tileset_.value());
+
+    // Load the HQ building sprite for this culture.
+    const std::string hq_sprite_id = "bldg." + culture + ".head";
+    for (const data::SpriteEntry& sprite : registry_->manifest().sprites) {
+        if (sprite.id == hq_sprite_id) {
+            hq_sprite_.texture = render::Texture::load(
+                renderer_, registry_->game_data_dir() / sprite.file);
+            hq_sprite_.anchor_x = static_cast<float>(sprite.anchor_x);
+            hq_sprite_.anchor_y = static_cast<float>(sprite.anchor_y);
+            break;
+        }
+    }
+
+    // Center the camera on the first player's starting headquarters.
     if (!world_->region().regions().empty()) {
         const world::Headquarters& hq = world_->region().regions().front().headquarters;
         const render::Vec2 hq_world = render::tile_to_world(
@@ -98,13 +132,6 @@ void GameplayScene::load_sprites() {
     }
 
     for (const data::SpriteEntry& sprite : registry_->manifest().sprites) {
-        if (sprite.id == kHqSpriteId) {
-            hq_sprite_.texture = render::Texture::load(renderer_, game_data_dir / sprite.file);
-            hq_sprite_.anchor_x = static_cast<float>(sprite.anchor_x);
-            hq_sprite_.anchor_y = static_cast<float>(sprite.anchor_y);
-            continue;
-        }
-
         if (sprite.id.rfind(kDecorationSpritePrefix, 0) == 0) {
             AnchoredSprite anchored;
             anchored.texture = render::Texture::load(renderer_, game_data_dir / sprite.file);
@@ -312,6 +339,37 @@ void GameplayScene::toggle_build_menu() {
 
 void GameplayScene::render_dev_gui() {
     ImGui::Begin("Dev Tools", &show_dev_gui_);
+
+    if (ImGui::CollapsingHeader("Map", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (world_) {
+            ImGui::TextDisabled("%-12s  culture: %s",
+                current_map_id_.c_str(),
+                world_->region().culture_set().c_str());
+        } else {
+            ImGui::TextDisabled("(no map loaded)");
+        }
+
+        const auto& maps = registry_->manifest().maps;
+        if (!maps.empty()) {
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::BeginListBox("##maplist", ImVec2(0, 200))) {
+                for (int i = 0; i < static_cast<int>(maps.size()); ++i) {
+                    const bool selected = (i == selected_map_index_);
+                    if (ImGui::Selectable(maps[i].id.c_str(), selected))  {
+                        if (maps[i].id != current_map_id_) {
+                            load_map(maps[i].id);
+                        }
+                    }
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndListBox();
+            }
+        } else {
+            ImGui::TextDisabled("No maps in manifest.");
+        }
+    }
+
+    ImGui::Separator();
     if (terrain_renderer_) {
         if (ImGui::CollapsingHeader("Terrain")) {
             ImGui::Checkbox("Shore overlays",    &terrain_renderer_->shore_overlays_enabled);

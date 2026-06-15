@@ -42,6 +42,7 @@ private:
         float anchor_y = 0.0f;
     };
 
+    void load_map(const std::string& map_id);
     void load_sprites();
     void render_decorations();
     void render_buildings();
@@ -70,6 +71,9 @@ private:
     bool pan_right_ = false;
     bool pan_up_    = false;
     bool pan_down_  = false;
+
+    std::string current_map_id_;
+    int         selected_map_index_ = 0;
 
     bool wants_quit_           = false;
     bool show_dev_gui_         = false;

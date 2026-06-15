@@ -108,7 +108,11 @@ def _load_city_names(data: bytes, data_root: DirNode, culture: str) -> dict[int,
         idx = struct.unpack_from("<I", data, child.abs_off + 4)[0]
         fields, _next_off = parse_record(data, child.dir.offset)
         name_field = fields.get("name")
-        if name_field is not None:
+        # Guard: only store if value is a real string (field.value can be None
+        # for unrecognised field encodings; storing None would cause
+        # dict.get(key, fallback) to return None instead of the fallback when
+        # the key exists, producing JSON null that C++ can't deserialise).
+        if name_field is not None and isinstance(name_field.value, str):
             names[idx] = name_field.value
     return names
 
@@ -172,29 +176,31 @@ def extract_map(
         x, y = _decode_loca(map_data, child.dir.offset, fields)
 
         if elem_type == "flop":
-            culture = fields["cult"].value
-            decoration_id = fields["spec"].value
+            culture = getattr(fields.get("cult"), "value", None) or ""
+            decoration_id = getattr(fields.get("spec"), "value", None)
+            if decoration_id is None:
+                decoration_id = 0
             decorations.append({
                 "type": "flop",
                 "culture": culture,
                 "decoration_id": decoration_id,
-                "sprite": f"flor.{culture}.{decoration_id}",
-                "x": x,
-                "y": y,
+                "sprite": f"flor.{culture}.{decoration_id}" if culture else "",
+                "x": x or 0.0,
+                "y": y or 0.0,
             })
         elif elem_type == "bepe":
             bepe_records.append({
                 "name_index": fields["name"].value,
-                "x": x,
-                "y": y,
+                "x": x or 0.0,
+                "y": y or 0.0,
             })
         elif elem_type == "regi":
             regi_records.append({
-                "culture_set": fields["cult"].value,
-                "starting_player": fields["owne"].value,
-                "x": x,
-                "y": y,
-                "rotation": fields["rota"].value,
+                "culture_set": getattr(fields.get("cult"), "value", None) or "",
+                "starting_player": getattr(fields.get("owne"), "value", None) or 0,
+                "x": x or 0.0,
+                "y": y or 0.0,
+                "rotation": getattr(fields.get("rota"), "value", None) or 0,
             })
 
     regions: list[dict[str, Any]] = []
@@ -209,11 +215,14 @@ def extract_map(
 
     cities: list[dict[str, Any]] = []
     if bepe_records:
-        culture_set = regi_records[0]["culture_set"] if regi_records else None
+        culture_set = regi_records[0]["culture_set"] if regi_records else ""
         city_names = _load_city_names(data_data, data_root, culture_set) if culture_set else {}
         for bepe in bepe_records:
+            # city_names.get(key, fallback) only uses the fallback when the key
+            # is absent; use `or` so a stored None also falls back to the string.
+            name = city_names.get(bepe["name_index"]) or f"city_{bepe['name_index']}"
             cities.append({
-                "name": city_names.get(bepe["name_index"], f"city_{bepe['name_index']}"),
+                "name": name,
                 "x": bepe["x"],
                 "y": bepe["y"],
                 "culture_set": culture_set,
