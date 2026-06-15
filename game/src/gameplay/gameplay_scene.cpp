@@ -226,8 +226,16 @@ bool GameplayScene::handle_event(const SDL_Event& event) {
 
         case SDL_MOUSEWHEEL:
             if (event.wheel.y != 0) {
+                float old_zoom = camera_.zoom;
                 camera_.set_zoom(camera_.zoom +
                                  (event.wheel.y > 0 ? kZoomStep : -kZoomStep));
+                float new_zoom = camera_.zoom;
+                int win_w = 0, win_h = 0;
+                SDL_GetWindowSize(window_, &win_w, &win_h);
+                float cx = win_w / 2.0f;
+                float cy = win_h / 2.0f;
+                camera_.world_pixel_offset.x += cx / old_zoom - cx / new_zoom;
+                camera_.world_pixel_offset.y += cy / old_zoom - cy / new_zoom;
             }
             return true;
 
