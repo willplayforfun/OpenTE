@@ -98,12 +98,7 @@ void MainMenuScene::render() {
 
 void MainMenuScene::render_background() {
     if (!lbak_.valid()) return;
-    // The original 'main' TView is at y=-28: background image rows 28-767
-    // map to screen rows 0-739. Show only this region, leaving the bottom
-    // 28 rows black.
-    const SDL_Rect src = {0, 28, 1024, 740};
-    const SDL_Rect dst = {0,  0, 1024, 740};
-    SDL_RenderCopy(renderer_, lbak_.handle(), &src, &dst);
+    SDL_RenderCopy(renderer_, lbak_.handle(), nullptr, nullptr);
 }
 
 void MainMenuScene::render_buttons() {
