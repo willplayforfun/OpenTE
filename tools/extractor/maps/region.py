@@ -221,10 +221,13 @@ def extract_map(
 
     name = episode_regions[0]["name"] if episode_regions else map_id
 
+    culture_set = regi_records[0]["culture_set"] if regi_records else ""
+
     return {
         "id": map_id,
         "name": name,
         "episode": episode,
+        "culture_set": culture_set,
         "width": width,
         "height": height,
         "terrain": {

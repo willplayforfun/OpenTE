@@ -7,50 +7,49 @@
 Per `OpenTE/implementation/terrain-blending-plan.md` Stage A, the original
 picks a per-tile texture from a 13-slot "texture page" table built from one
 `terr/sets/<N>` palette record (`documentation/extracted/
-data_catalog_terr_sets.txt`, B15 Round 36). `_TEXTURE_PAGE_SOURCES` below is
-that 13-slot table resolved for palette `N=16` ("chi1" -- matches
-`ep01_china`'s culture set), per Stage A.3/A.4 as corrected by the full
-disassembly of `fcn.0x466790` (`documentation/extracted/
-exe_b15_round36_init.txt` lines 170-470):
+data_catalog_terr_sets.txt`, B15 Round 36).  The 13-slot ordering was
+confirmed by full disassembly of `fcn.0x466790` (`documentation/extracted/
+exe_b15_round36_init.txt` lines 170-470): the function writes each palette
+field to a destination struct at a fixed stride of 0x1c (28) bytes/slot
+starting at `esi+0x1c`, and slot 11 (`esi+0x134`) is **never written** --
+the write sequence jumps directly from soil (slot 10, `esi+0x118`) to
+dsr0 (slot 12, `esi+0x150`).
 
-```
-index:  1     2     3     4     5     6     7     8     9     10    11    12    13
-field:  deep  seas  alps  bld0  bld1  bld2  hill  mntn  undr  soil  ?     dsr0  dsr1
-chi1:   deep  seas  snow  ts17  ts16  ts15  chhi  chmo  ts14  ts18  ?     sand  sand
-```
+Slot -> struct-field mapping (applies identically to every palette):
+  1=deep  2=seas  3=alps  4=bld0  5=bld1  6=bld2  7=hill  8=mntn
+  9=undr  10=soil  [11 never written]  12=dsr0  13=dsr1
 
-Two corrections to the original Stage A.3 table:
+`tran` is at a separate offset (`esi+0x1b3c`) outside the 13-slot table.
 
-- **Index 1 is `deep`, not `hidd`.** `hidd` is written to a *scratch local*
-  at the top of `fcn.0x466790`, then passed to the per-field copy helper
-  alongside each `terr/sets/<N>` lookup -- it's a fallback substituted when a
-  field resolves to the `none` sentinel, not a table slot. `terr/hidd` is a
-  starfield; per the user (2026-06-12), it's a tiling texture drawn *behind*
-  the terrain (visible past the map edges), unrelated to the 13-slot
-  per-tile table. There is no "fog of war"/"unexplored" concept here.
-- **Index 11 has no source in `fcn.0x466790` at all** -- the 28-byte-stride
-  table write sequence goes `...soil (slot 10) -> [slot 11 skipped] -> dsr0
-  (slot 12) -> dsr1 (slot 13)`, with no write to the slot-11 offset
-  (`esi+0x134`). `tran` (chi1 -> `trch`) is a *separate* single-texture slot
-  (`esi+0x1b3c`, grouped with `coa0`/`coa1`/`edge`/per-culture decoration
-  refs), not index 11's source -- matches `trch`'s visual content (a 4x4
-  grid of distinct sparkle/particle frames, not a tileable ground texture;
-  likely a transport-route decoration atlas). **Index 11 is left unmapped
-  below** (empty sprite id, renderer falls back to flat shading for any tile
-  with `texture_index == 11`) -- TODO: dig further into whether/how slot 11
-  is ever actually selected by real `mapp.terr` data before assuming it's
-  truly dead.
+`_CULTURES` below encodes this for the four named palettes
+(`documentation/extracted/data_catalog_terr_sets.txt`, palette indices
+0/15/16/17 = ind1/eur1/chi1/per1).  Index 11 is left unmapped for all
+cultures (empty sprite id; renderer falls back to flat shading).
 
-Each texture page is extracted at **full native resolution (256x256)**, no
-downsample, no diamond mask. Per B15 Round 34, the renderer's continuous
-`uv = (col/8, row/16)` scheme means each page tiles seamlessly across an
-8x16-tile region of the map (32x16px per tile, 2x-magnified onto the 64x32
-screen diamond) -- the texture must stay at its native tileable resolution
-for that math to land on a sensible sample size (a 64x32-downsampled page
-would only yield an 8x2px sample per tile, magnified 8x).
+Sprite IDs use the form `terrain.<culture>.page<NN>` so all four cultures'
+assets can coexist in the same manifest.  Shore atlases (`terrain.coa0`,
+`terrain.coa1`), the map-edge texture (`terrain.edge`), and the starfield
+background (`terrain.hidd`) are shared across all cultures and keep their
+culture-free IDs.
 
-`terr/coa0`/`terr/coa1` (Stage C.1, shore-overlay atlases) and `terr/edge`
-are extracted at full native resolution (256x256), unscaled/unmasked.
+`terrain_textures.json` schema:
+  {
+    "cultures": {
+      "<culture>": {
+        "pages": ["", "terrain.<culture>.page01", ..., "terrain.<culture>.page13"],
+        "tran": "terrain.<culture>.tran",
+        "hidd": "terrain.hidd"      // same string for every culture
+      },
+      ...
+    }
+  }
+  "pages" is a 14-element list (index 0 unused/empty, indices 1-13 are the
+  page sprite IDs; index 11 is always empty).
+
+Each texture page is extracted at full native resolution (256x256).  Per
+B15 Round 34, the renderer's continuous `uv = (col/8, row/16)` scheme
+means each page tiles seamlessly across an 8x16-tile region -- the texture
+must stay at native resolution for that math to land correctly.
 """
 from __future__ import annotations
 
@@ -61,22 +60,52 @@ from ..manifest import SpriteEntry
 from ..tables.json_io import write_json
 from .sprite import decode_sprite, find_leaf, write_png_rgba
 
-# 13-slot texture-page table (index 1-13 -> `terr/<tag>`), resolved for the
-# "chi1" palette (`terr/sets/16`) -- see module docstring. Index 11 has no
-# confirmed source (see docstring) and is left unmapped.
-_TEXTURE_PAGE_SOURCES: dict[int, str] = {
-    1: "deep",
-    2: "seas",
-    3: "snow",
-    4: "ts17",
-    5: "ts16",
-    6: "ts15",
-    7: "chhi",
-    8: "chmo",
-    9: "ts14",
-    10: "ts18",
-    12: "sand",
-    13: "sand",
+# Per-culture page sources.  Slot ordering confirmed by EXE fcn.0x466790
+# disasm (exe_b15_round36_init.txt lines 170-470); palette indices and
+# sprite tags from data_catalog_terr_sets.txt.
+# Key: culture name.  Value: {pages: {slot->terr/<tag>}, tran: <tag>}.
+_CULTURES: dict[str, dict] = {
+    "chi1": {  # palette 16
+        "pages": {
+            1: "deep", 2: "seas", 3: "snow",
+            4: "ts17", 5: "ts16", 6: "ts15",
+            7: "chhi", 8: "chmo",
+            9: "ts14", 10: "ts18",
+            # slot 11: never written by fcn.0x466790
+            12: "sand", 13: "sand",
+        },
+        "tran": "trch",
+    },
+    "eur1": {  # palette 15
+        "pages": {
+            1: "deep", 2: "seas", 3: "snow",
+            4: "ts23", 5: "ts25", 6: "ts26",
+            7: "chhi", 8: "bigm",
+            9: "ts24", 10: "sand",
+            12: "sand", 13: "sand",
+        },
+        "tran": "tr15",
+    },
+    "per1": {  # palette 17
+        "pages": {
+            1: "deep", 2: "seas", 3: "snow",
+            4: "ts11", 5: "ts12", 6: "ts13",
+            7: "chhi", 8: "bigm",
+            9: "ts14", 10: "ts14",
+            12: "dirt", 13: "sand",
+        },
+        "tran": "tr17",
+    },
+    "ind1": {  # palette 0
+        "pages": {
+            1: "deep", 2: "seas", 3: "snow",
+            4: "ts19", 5: "ts20", 6: "ts21",
+            7: "chhi", 8: "mntn",
+            9: "ts22", 10: "ts22",
+            12: "sand", 13: "sand",
+        },
+        "tran": "tr14",
+    },
 }
 
 _EDGE_TEXTURE_TAG = "edge"
@@ -85,19 +114,18 @@ _EDGE_SPRITE_ID = "terrain.edge"
 _HIDD_TEXTURE_TAG = "hidd"
 _HIDD_SPRITE_ID = "terrain.hidd"
 
-# Edge-blend atlas (Stage B, B15 Round 40): a 4x4-cell dithered-dissolve
-# atlas, one per culture palette -- "trch" is `terr/sets/16`'s ("chi1")
-# `tran` field (`data_catalog_terr_sets.txt`).
-_TRAN_TEXTURE_TAG = "trch"
-_TRAN_SPRITE_ID = "terrain.tran"
+# Shore-overlay atlases (Stage C.1) -- shared across all cultures.
+_SHORE_ATLAS_TAGS = {
+    "coa0": "terrain.coa0",
+    "coa1": "terrain.coa1",
+}
 
-# `terr/trch` decodes fully opaque (alpha==255 everywhere) with near-black
-# (RGB <= ~0x1F) "dither dot" pixels forming the dissolve pattern -- there is
-# no usable alpha gradient to blend with. Recut it as a hard alpha mask
-# (dot pixels opaque, near-black background fully transparent) so the
-# edge-blend pass (drawn with SDL_BLENDMODE_BLEND) shows only the dissolve
-# dots, letting the base terrain pass show through everywhere else.
+# `tran` atlases decode fully opaque (alpha==255 everywhere) with near-black
+# (RGB <= ~0x1F) dither-dot pixels.  Recut to hard alpha so the edge-blend
+# pass (SDL_BLENDMODE_BLEND) shows only the dots.
 _TRAN_DISSOLVE_THRESHOLD = 8
+
+_TERRAIN_TEXTURES_TABLE_PATH = Path("tables") / "terrain_textures.json"
 
 
 def _apply_dissolve_mask(rgba: bytes, threshold: int = _TRAN_DISSOLVE_THRESHOLD) -> bytes:
@@ -106,21 +134,19 @@ def _apply_dissolve_mask(rgba: bytes, threshold: int = _TRAN_DISSOLVE_THRESHOLD)
         out[i + 3] = 255 if max(out[i], out[i + 1], out[i + 2]) > threshold else 0
     return bytes(out)
 
-# Shore-overlay atlases (Stage C.1).
-_SHORE_ATLAS_TAGS = {
-    "coa0": "terrain.coa0",
-    "coa1": "terrain.coa1",
-}
 
-_TERRAIN_TEXTURES_TABLE_PATH = Path("tables") / "terrain_textures.json"
+def extract_terrain_textures_all_cultures(
+    m_ui_data: bytes,
+    m_ui_root: DirNode,
+    output_dir: Path,
+) -> list[SpriteEntry]:
+    """Extracts terrain texture pages, tran atlases, shore overlays, and the
+    map-edge texture for all four named cultures (chi1/eur1/per1/ind1).
 
-
-def extract_terrain_textures(m_ui_data: bytes, m_ui_root: DirNode,
-                              output_dir: Path) -> list[SpriteEntry]:
-    """Returns `SpriteEntry` list for the 13 terrain texture pages, the
-    shore-overlay atlases, and the map-edge texture; writes their PNGs under
-    `<output_dir>/sprites/terrain/` and the resolved palette table to
-    `<output_dir>/tables/terrain_textures.json`."""
+    Writes PNGs under `<output_dir>/sprites/terrain/` and the combined
+    palette table to `<output_dir>/tables/terrain_textures.json`.
+    Returns a `SpriteEntry` list for the manifest.
+    """
     terr_entry = find_child(m_ui_root, "terr")
     if terr_entry is None or terr_entry.dir is None:
         return []
@@ -129,26 +155,58 @@ def extract_terrain_textures(m_ui_data: bytes, m_ui_root: DirNode,
     sprites_dir = output_dir / "sprites" / "terrain"
     sprites_dir.mkdir(parents=True, exist_ok=True)
 
-    entries: list[SpriteEntry] = []
-    page_sprite_ids: list[str] = []
+    all_entries: list[SpriteEntry] = []
+    cultures_json: dict = {}
 
-    for index in range(1, 14):
-        tag = _TEXTURE_PAGE_SOURCES.get(index)
-        leaf = find_leaf(terr_root, [tag]) if tag is not None else None
-        if leaf is None:
-            page_sprite_ids.append("")
-            continue
-        sprite = decode_sprite(m_ui_data, leaf.abs_off, leaf.size)
-        if sprite is None:
-            page_sprite_ids.append("")
-            continue
-        sprite_id = f"terrain.page{index:02d}"
-        relative_path = Path("sprites") / "terrain" / f"{sprite_id}.png"
-        write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, sprite.rgba)
-        entries.append(SpriteEntry(id=sprite_id, file=str(relative_path).replace("\\", "/"),
-                                     width=sprite.width, height=sprite.height))
-        page_sprite_ids.append(sprite_id)
+    for culture, spec in _CULTURES.items():
+        page_sprite_ids: list[str] = [""]  # index 0 unused
+        tran_sprite_id = ""
 
+        for index in range(1, 14):
+            tag = spec["pages"].get(index)
+            leaf = find_leaf(terr_root, [tag]) if tag is not None else None
+            if leaf is None:
+                page_sprite_ids.append("")
+                continue
+            sprite = decode_sprite(m_ui_data, leaf.abs_off, leaf.size)
+            if sprite is None:
+                page_sprite_ids.append("")
+                continue
+            sprite_id = f"terrain.{culture}.page{index:02d}"
+            relative_path = Path("sprites") / "terrain" / f"{sprite_id}.png"
+            write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, sprite.rgba)
+            all_entries.append(SpriteEntry(
+                id=sprite_id,
+                file=str(relative_path).replace("\\", "/"),
+                width=sprite.width,
+                height=sprite.height,
+            ))
+            page_sprite_ids.append(sprite_id)
+
+        tran_tag = spec.get("tran", "")
+        if tran_tag:
+            tran_leaf = find_leaf(terr_root, [tran_tag])
+            if tran_leaf is not None:
+                sprite = decode_sprite(m_ui_data, tran_leaf.abs_off, tran_leaf.size)
+                if sprite is not None:
+                    tran_sprite_id = f"terrain.{culture}.tran"
+                    relative_path = Path("sprites") / "terrain" / f"{tran_sprite_id}.png"
+                    rgba = _apply_dissolve_mask(sprite.rgba)
+                    write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, rgba)
+                    all_entries.append(SpriteEntry(
+                        id=tran_sprite_id,
+                        file=str(relative_path).replace("\\", "/"),
+                        width=sprite.width,
+                        height=sprite.height,
+                    ))
+
+        cultures_json[culture] = {
+            "pages": page_sprite_ids,
+            "tran": tran_sprite_id,
+            "hidd": _HIDD_SPRITE_ID,
+        }
+
+    # Shared sprites: shore overlays, map-edge skirt, starfield background.
     for tag, sprite_id in _SHORE_ATLAS_TAGS.items():
         leaf = find_leaf(terr_root, [tag])
         if leaf is None:
@@ -159,8 +217,12 @@ def extract_terrain_textures(m_ui_data: bytes, m_ui_root: DirNode,
         relative_path = Path("sprites") / "terrain" / f"{sprite_id}.png"
         rgba = _apply_dissolve_mask(sprite.rgba)
         write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, rgba)
-        entries.append(SpriteEntry(id=sprite_id, file=str(relative_path).replace("\\", "/"),
-                                     width=sprite.width, height=sprite.height))
+        all_entries.append(SpriteEntry(
+            id=sprite_id,
+            file=str(relative_path).replace("\\", "/"),
+            width=sprite.width,
+            height=sprite.height,
+        ))
 
     edge_leaf = find_leaf(terr_root, [_EDGE_TEXTURE_TAG])
     if edge_leaf is not None:
@@ -168,33 +230,26 @@ def extract_terrain_textures(m_ui_data: bytes, m_ui_root: DirNode,
         if sprite is not None:
             relative_path = Path("sprites") / "terrain" / f"{_EDGE_SPRITE_ID}.png"
             write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, sprite.rgba)
-            entries.append(SpriteEntry(id=_EDGE_SPRITE_ID, file=str(relative_path).replace("\\", "/"),
-                                         width=sprite.width, height=sprite.height))
+            all_entries.append(SpriteEntry(
+                id=_EDGE_SPRITE_ID,
+                file=str(relative_path).replace("\\", "/"),
+                width=sprite.width,
+                height=sprite.height,
+            ))
 
-    hidd_sprite_id = ""
     hidd_leaf = find_leaf(terr_root, [_HIDD_TEXTURE_TAG])
     if hidd_leaf is not None:
         sprite = decode_sprite(m_ui_data, hidd_leaf.abs_off, hidd_leaf.size)
         if sprite is not None:
             relative_path = Path("sprites") / "terrain" / f"{_HIDD_SPRITE_ID}.png"
             write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, sprite.rgba)
-            entries.append(SpriteEntry(id=_HIDD_SPRITE_ID, file=str(relative_path).replace("\\", "/"),
-                                         width=sprite.width, height=sprite.height))
-            hidd_sprite_id = _HIDD_SPRITE_ID
+            all_entries.append(SpriteEntry(
+                id=_HIDD_SPRITE_ID,
+                file=str(relative_path).replace("\\", "/"),
+                width=sprite.width,
+                height=sprite.height,
+            ))
 
-    tran_sprite_id = ""
-    tran_leaf = find_leaf(terr_root, [_TRAN_TEXTURE_TAG])
-    if tran_leaf is not None:
-        sprite = decode_sprite(m_ui_data, tran_leaf.abs_off, tran_leaf.size)
-        if sprite is not None:
-            relative_path = Path("sprites") / "terrain" / f"{_TRAN_SPRITE_ID}.png"
-            rgba = _apply_dissolve_mask(sprite.rgba)
-            write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, rgba)
-            entries.append(SpriteEntry(id=_TRAN_SPRITE_ID, file=str(relative_path).replace("\\", "/"),
-                                         width=sprite.width, height=sprite.height))
-            tran_sprite_id = _TRAN_SPRITE_ID
+    write_json(output_dir / _TERRAIN_TEXTURES_TABLE_PATH, {"cultures": cultures_json})
 
-    write_json(output_dir / _TERRAIN_TEXTURES_TABLE_PATH,
-                {"pages": page_sprite_ids, "tran": tran_sprite_id, "hidd": hidd_sprite_id})
-
-    return entries
+    return all_entries

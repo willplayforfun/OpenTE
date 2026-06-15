@@ -30,7 +30,7 @@ from .sprites.buildings import find_building_sprite_path
 from .sprites.decorations import extract_decoration_sprites
 from .sprites.font import extract_fonts
 from .sprites.sprite import decode_sprite, find_leaf, write_png_rgba
-from .sprites.terrain import extract_terrain_textures
+from .sprites.terrain import extract_terrain_textures_all_cultures
 from .sprites.ui import extract_ui_sprites
 from .tables.abilities import extract_abilities
 from .tables.bandits import extract_bandits
@@ -55,11 +55,6 @@ _TABLE_EXTRACTORS: list[tuple[str, Callable[[bytes, DirNode], Any]]] = [
     ("technologies", extract_technologies),
     ("episodes", extract_episodes),
     ("events", extract_events),
-]
-
-# Maps to extract for Stage 1 -- (map id, episode id, "Maps/<file>.{}" stem).
-_MAPS: list[tuple[str, str, str]] = [
-    ("ep01_china", "ep01", "ep01 China"),
 ]
 
 # Building id placed at every region's headquarters marker (per
@@ -135,21 +130,66 @@ def _extract_building_sprite(bldg_data: bytes, bldg_root: DirNode, buildings: di
                         anchor_x=sprite.anchor_x, anchor_y=sprite.anchor_y)
 
 
-def _extract_maps(game_dir: GameDirectory, data_data: bytes, data_root: DirNode,
-                   bldg_data: bytes, bldg_root: DirNode, buildings: dict[str, dict[str, Any]],
-                   episodes: dict[str, dict[str, Any]], output_dir: Path) -> tuple[list[MapEntry], list[SpriteEntry]]:
+def _discover_maps(
+    episodes: dict[str, dict[str, Any]],
+    maps_dir: Path,
+) -> list[tuple[str, str, str, dict[str, Any]]]:
+    """Discovers extractable maps from the episodes table and Maps/ directory.
+
+    Iterates every episode's regions in order, looks for a corresponding
+    `<file_stem>.{}` file, and returns one entry per found file:
+      (map_id, episode_id, file_stem, episode_region_dict)
+
+    `map_id` is `<ep_id>_<region_id>` (e.g. `ep01_chin`, `ep02_meso`).
+    `episode_region_dict` is the matching entry from `episodes[ep]["regions"]`
+    (used to supply the region's canonical id/name to `extract_map`).
+
+    Sorted deterministically by episode then region order; skips any region
+    whose map file does not exist on disk.
+    """
+    result: list[tuple[str, str, str, dict[str, Any]]] = []
+    for ep_id, ep_data in sorted(episodes.items()):
+        for region in ep_data.get("regions", []):
+            file_stem = region.get("file", "")
+            region_id = region.get("id", "")
+            if not file_stem or not region_id:
+                continue
+            map_file = maps_dir / f"{file_stem}.{{}}"
+            if not map_file.is_file():
+                continue
+            map_id = f"{ep_id}_{region_id}"
+            result.append((map_id, ep_id, file_stem, region))
+    return result
+
+
+def _extract_maps(
+    game_dir: GameDirectory,
+    data_data: bytes,
+    data_root: DirNode,
+    bldg_data: bytes,
+    bldg_root: DirNode,
+    buildings: dict[str, dict[str, Any]],
+    episodes: dict[str, dict[str, Any]],
+    output_dir: Path,
+) -> tuple[list[MapEntry], list[SpriteEntry]]:
     maps_dir = output_dir / "maps"
     maps_dir.mkdir(parents=True, exist_ok=True)
 
+    discovered = _discover_maps(episodes, game_dir.maps_dir)
+    if not discovered:
+        print("  warning: no map files found in Maps/ directory")
+
     map_entries = []
     sprite_entries: dict[str, SpriteEntry] = {}
-    for map_id, episode, file_stem in _MAPS:
+
+    for map_id, episode, file_stem, ep_region in discovered:
         map_data, map_footer = load(game_dir.maps_dir / f"{file_stem}.{{}}")
         map_root = parse_tree(map_data, map_footer)
 
-        episode_regions = episodes.get(episode, {}).get("regions", [])
+        # Pass only the single matching region so extract_map picks the right
+        # id/name for episode_regions[0] without being confused by sibling regions.
         result = extract_map(map_data, map_root, map_id=map_id, episode=episode,
-                              episode_regions=episode_regions, data_data=data_data, data_root=data_root)
+                              episode_regions=[ep_region], data_data=data_data, data_root=data_root)
 
         relative_path = Path("maps") / f"{map_id}.json"
         write_json(output_dir / relative_path, result)
@@ -181,19 +221,20 @@ def run(game_dir: GameDirectory, output_dir: Path) -> None:
     for entry in table_entries:
         print(f"  wrote table '{entry.id}' -> {entry.file}")
 
-    print("Extracting maps and building sprites...")
+    print("Discovering and extracting maps...")
     bldg_data, bldg_footer = load(game_dir.data_dir / "bldg.{}")
     bldg_root = parse_tree(bldg_data, bldg_footer)
 
     map_entries, sprite_entries = _extract_maps(game_dir, data_data, data_root, bldg_data, bldg_root,
                                                   tables["buildings"], tables["episodes"], output_dir)
+    print(f"  {len(map_entries)} maps extracted")
     for entry in map_entries:
-        print(f"  map '{entry.id}' -> {entry.file}")
+        print(f"    {entry.id} -> {entry.file}")
 
-    print("Extracting terrain textures...")
+    print("Extracting terrain textures (all cultures)...")
     m_ui_data, m_ui_footer = load(game_dir.data_dir / "m_ui,u.{}")
     m_ui_root = parse_tree(m_ui_data, m_ui_footer)
-    terrain_entries = extract_terrain_textures(m_ui_data, m_ui_root, output_dir)
+    terrain_entries = extract_terrain_textures_all_cultures(m_ui_data, m_ui_root, output_dir)
     sprite_entries += terrain_entries
     table_entries.append(TableEntry(id="terrain_textures", file="tables/terrain_textures.json"))
     print(f"  {len(terrain_entries)} terrain sprites written")
