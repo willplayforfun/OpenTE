@@ -2,15 +2,23 @@
 
 `flor.{}` has one top-level directory per culture set (`chin`, `foly`,
 `indi`, `pers`), each holding a per-culture `ap01` palette plus a mix of
-sprite leaves. For `chin` (the only culture used by the `ep01_china` map),
-the 7 sprite leaves are tagged with raw little-endian int32 indices `0`-`6`
-(see CLAUDE.md gotcha 8) that match `elem.flop.spec` 1:1 -- confirmed by
-cross-checking `ep01 China.{}`'s `elem.flop` records (488 records, all
-`cult=chin`, `spec` in `0..6`, exactly matching `chin`'s 7 leaves).
+sprite leaves. All four culture sets tag their decoration leaves with raw
+little-endian int32 indices (`0`, `1`, `2`, ...) matching `elem.flop.spec`
+1:1 -- confirmed by cross-checking all 74 map files:
 
-The other cultures' decoration sets (`foly`/`indi`/`pers`, including the
-`rkNN` "rock" leaves under `foly`) use a different convention that hasn't
-been confirmed yet and aren't extracted here.
+  - `chin`: indices 0-6  (7 leaves)   used by ep01 China + Tutorial maps
+  - `indi`: indices 0-21 (22 leaves)  used by ep02-ep05 Indian/Indus maps
+  - `pers`: indices 0-21 (22 leaves)  used by ep02-ep04 Persian/Assyrian maps
+  - `foly`: indices 0-19 (20 leaves)  not used by any current map, extracted
+                                       for completeness
+
+`foly` also has `rk00`-`rk12` ASCII-tagged rock leaves; their int32
+representation falls well above `_MAX_INDEX` so they are filtered out
+by the existing guard. No map currently uses rock decorations.
+
+The last child in each culture dir is the container format's "+1 spillover"
+entry (CLAUDE.md gotcha 1) whose tag is the *next* sibling's culture name;
+its decoded int32 is also > `_MAX_INDEX` and is filtered safely.
 """
 from __future__ import annotations
 
@@ -21,9 +29,8 @@ from ..containers.container import DirNode, find_child
 from ..manifest import SpriteEntry
 from .sprite import decode_sprite, write_png_rgba
 
-# Cultures whose decoration leaves are raw-int-tagged and directly indexed
-# by `elem.flop.spec` (see module docstring).
-_INDEXED_CULTURES = ("chin",)
+# All four culture sets use raw-int-tagged leaves indexed by `elem.flop.spec`.
+_INDEXED_CULTURES = ("chin", "foly", "indi", "pers")
 
 # Raw int32 tags outside this range are ASCII tags (e.g. the table's "+1
 # spillover" trailing directory header, tagged with the *next* table's name)
