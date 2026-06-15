@@ -47,6 +47,18 @@ public:
                    int x, int baseline_y,
                    SDL_Color color) const;
 
+    /// Draws `text` with a drop shadow: a shadow pass in `shadow` at
+    /// (x+dx, baseline_y+dy), then the main pass in `color`. The original
+    /// Trade Empires UI renders all text with a 1px shadow, so this is the
+    /// default path for UI text. (Inline <o> outline markup is a separate,
+    /// symmetric effect — not this.)
+    void draw_text_shadowed(SDL_Renderer* renderer,
+                            const char* text,
+                            int x, int baseline_y,
+                            SDL_Color color,
+                            SDL_Color shadow = SDL_Color{0, 0, 0, 255},
+                            int dx = 1, int dy = 1) const;
+
     /// Returns the pixel width of `text` (sum of advance widths).
     int measure_text(const char* text) const;
 

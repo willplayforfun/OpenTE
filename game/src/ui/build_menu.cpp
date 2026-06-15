@@ -25,6 +25,11 @@ inline void sdl_outline(SDL_Renderer* r, const Rect& rect,
     SDL_RenderDrawRect(r, &sr);
 }
 
+// All UI text in the original is drawn with a 1px drop shadow; route every
+// text draw in this panel through the shadowed path. (Black, offset (1,1) —
+// tune kTextShadow / the offset if a screenshot shows otherwise.)
+constexpr SDL_Color kTextShadow{0, 0, 0, 255};
+
 void draw_centred(SDL_Renderer* r, Font* f, const Rect& rect,
                   const char* text, SDL_Color c) {
     if (!f || !text || !text[0]) return;
@@ -32,7 +37,7 @@ void draw_centred(SDL_Renderer* r, Font* f, const Rect& rect,
     const int th = f->ascender() + f->descender();
     const int x  = rect.x + (rect.w - tw) / 2;
     const int y  = rect.y + (rect.h - th) / 2 + f->ascender();
-    f->draw_text(r, text, x, y, c);
+    f->draw_text_shadowed(r, text, x, y, c, kTextShadow);
 }
 
 void draw_left(SDL_Renderer* r, Font* f,
@@ -40,7 +45,7 @@ void draw_left(SDL_Renderer* r, Font* f,
                const char* text, SDL_Color c) {
     if (!f || !text || !text[0]) return;
     const int y = row_y + (row_h - (f->ascender() + f->descender())) / 2 + f->ascender();
-    f->draw_text(r, text, x, y, c);
+    f->draw_text_shadowed(r, text, x, y, c, kTextShadow);
 }
 
 void draw_right(SDL_Renderer* r, Font* f,
@@ -50,17 +55,21 @@ void draw_right(SDL_Renderer* r, Font* f,
     const int tw = f->measure_text(text);
     const int x  = rect_x + rect_w - tw - 4;
     const int y  = row_y + (row_h - (f->ascender() + f->descender())) / 2 + f->ascender();
-    f->draw_text(r, text, x, y, c);
+    f->draw_text_shadowed(r, text, x, y, c, kTextShadow);
 }
 
 }  // namespace
 
 // ---------------------------------------------------------------------------
 
-void BuildMenu::blit_skin(SDL_Renderer* r, const SkinSprite& s, int ox, int oy) {
+void BuildMenu::blit_skin(SDL_Renderer* r, const SkinSprite& s, int ox, int oy,
+                          int frame, int nframes) {
     if (!s.valid()) return;
-    const SDL_Rect dst{ox + s.anchor_x, oy + s.anchor_y, s.w, s.h};
-    SDL_RenderCopy(r, s.tex, nullptr, &dst);
+    if (nframes < 1) nframes = 1;
+    const int fw = s.w / nframes;
+    const SDL_Rect src{frame * fw, 0, fw, s.h};
+    const SDL_Rect dst{ox + s.anchor_x, oy + s.anchor_y, fw, s.h};
+    SDL_RenderCopy(r, s.tex, &src, &dst);
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +299,7 @@ void BuildMenu::render_info(SDL_Renderer* r, Font* font) const {
     auto draw_c = [&](const std::string& s, SDL_Color c) {
         if (s.empty() || y >= bottom) return;
         const int tw = font->measure_text(s.c_str());
-        font->draw_text(r, s.c_str(), box_cx - tw / 2, y, c);
+        font->draw_text_shadowed(r, s.c_str(), box_cx - tw / 2, y, c, kTextShadow);
         y += step;
     };
 
@@ -328,11 +337,12 @@ void BuildMenu::render_info(SDL_Renderer* r, Font* font) const {
 void BuildMenu::render_bottom_buttons(SDL_Renderer* r, Font* font) const {
     const bool can_confirm = !selected_id_.empty();
 
-    // Confirm.
+    // Confirm. The sprite is two 32px frames (normal | pressed); draw one.
     if (skin_.valid() && skin_.confirm_btn.valid()) {
         if (!can_confirm)
             SDL_SetTextureColorMod(skin_.confirm_btn.tex, 80, 80, 80);
-        blit_skin(r, skin_.confirm_btn, dialog_ox_, dialog_oy_);
+        blit_skin(r, skin_.confirm_btn, dialog_ox_, dialog_oy_,
+                  pressed_btn_ == 1 ? 1 : 0, 2);
         if (!can_confirm)
             SDL_SetTextureColorMod(skin_.confirm_btn.tex, 255, 255, 255);
     } else {
@@ -352,9 +362,10 @@ void BuildMenu::render_bottom_buttons(SDL_Renderer* r, Font* font) const {
                               : SDL_Color{120, 115, 90, 180});
     }
 
-    // Cancel / exit.
+    // Cancel / exit. Same two-frame sprite layout.
     if (skin_.valid() && skin_.cancel_btn.valid()) {
-        blit_skin(r, skin_.cancel_btn, dialog_ox_, dialog_oy_);
+        blit_skin(r, skin_.cancel_btn, dialog_ox_, dialog_oy_,
+                  pressed_btn_ == 2 ? 1 : 0, 2);
     } else {
         sdl_fill(r, canc_rect_, 55, 35, 35, 200);
     }
@@ -483,17 +494,34 @@ bool BuildMenu::handle_event(const SDL_Event& e) {
             return true;
         }
 
+        // Buttons: press on down (show the pressed frame), fire on release.
         if (!selected_id_.empty() && conf_rect_.contains(mx, my)) {
-            if (on_select_) on_select_(selected_id_);
+            pressed_btn_ = 1;
             return true;
         }
-
         if (canc_rect_.contains(mx, my)) {
-            if (on_select_) on_select_("");
+            pressed_btn_ = 2;
             return true;
         }
 
         return true;
+    }
+
+    if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) {
+        const int mx = e.button.x, my = e.button.y;
+        const int was = pressed_btn_;
+        pressed_btn_ = 0;
+        // Clear state before invoking the callback: it may close (delete) this
+        // widget, so no member access is allowed afterwards.
+        if (was == 1 && !selected_id_.empty() && conf_rect_.contains(mx, my)) {
+            if (on_select_) on_select_(selected_id_);
+            return true;
+        }
+        if (was == 2 && canc_rect_.contains(mx, my)) {
+            if (on_select_) on_select_("");
+            return true;
+        }
+        return was != 0;
     }
 
     return false;

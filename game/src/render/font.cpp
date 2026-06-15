@@ -159,6 +159,16 @@ void BitmapFont::draw_text(SDL_Renderer* renderer,
     }
 }
 
+void BitmapFont::draw_text_shadowed(SDL_Renderer* renderer,
+                                    const char* text,
+                                    int x, int baseline_y,
+                                    SDL_Color color,
+                                    SDL_Color shadow,
+                                    int dx, int dy) const {
+    draw_text(renderer, text, x + dx, baseline_y + dy, shadow);
+    draw_text(renderer, text, x, baseline_y, color);
+}
+
 int BitmapFont::measure_text(const char* text) const {
     int w = 0;
     const char* p = text;

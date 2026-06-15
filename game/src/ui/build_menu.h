@@ -132,6 +132,7 @@ private:
     int         selected_row_  = -1;
     int         hover_row_     = -1;
     int         scroll_offset_ = 0;
+    int         pressed_btn_   = 0;  // 0=none, 1=confirm, 2=cancel (held down)
 
     // ---------------------------------------------------------------------------
     // Laid-out geometry (set by layout())
@@ -166,7 +167,12 @@ private:
     void render_info(SDL_Renderer* r, Font* font) const;
     void render_bottom_buttons(SDL_Renderer* r, Font* font) const;
 
-    static void blit_skin(SDL_Renderer* r, const SkinSprite& s, int ox, int oy);
+    // Blits one horizontal frame of a multi-frame sprite. The conf/canc
+    // sprites are 64x29 = two 32x29 frames (left = normal, right = pressed);
+    // the original only ever draws one (the widget rect is 32 wide, half the
+    // sprite). frame in [0,nframes).
+    static void blit_skin(SDL_Renderer* r, const SkinSprite& s, int ox, int oy,
+                          int frame = 0, int nframes = 1);
 };
 
 }  // namespace opente::ui
