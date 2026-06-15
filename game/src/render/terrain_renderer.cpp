@@ -193,16 +193,15 @@ TerrainRenderer::TerrainRenderer(SDL_Renderer* renderer, const world::Region& re
     const int vw = width + 1;  // num verts along width
     const int vh = height + 1; // num verts along height
 
-    // A tile's height for mesh purposes:
-    // Water tiles are pinned to the region's sea level, so water renders as a flat plane.
-    // Out-of-bound coordinates use the nearest map edge.
+    // Per the original game's EXE: GetTerrainHeight (fcn.004650f0) returns
+    // raw alti_byte with no terrain-type check — water tiles use raw altitude
+    // like everything else.  The altitude data is naturally smooth at
+    // coastlines (max ~3 units between adjacent water tiles), so no override
+    // is needed; the sea_level() override we had before actually *created*
+    // visible cliffs by yanking coastal water tiles down to the map minimum.
     auto tile_height = [&](int tx, int ty) -> float {
         tx = std::clamp(tx, 0, width - 1);
         ty = std::clamp(ty, 0, height - 1);
-        const world::TerrainType terrain = region_->terrain_at(tx, ty);
-        if (terrain == world::TerrainType::DeepWater || terrain == world::TerrainType::ShallowWater) {
-            return static_cast<float>(region_->sea_level());
-        }
         return static_cast<float>(region_->height_at(tx, ty));
     };
 
@@ -391,8 +390,8 @@ void TerrainRenderer::render(const Camera& camera) const {
     // Stage C shore overlays).
     static constexpr int kCornerCol[4] = {0, 1, 1, 0};
     static constexpr int kCornerRow[4] = {0, 0, 1, 1};
-    static constexpr float kUPeriod = 4.0f;
-    static constexpr float kVPeriod = 8.0f;
+    static constexpr float kUPeriod = 8.0f;
+    static constexpr float kVPeriod = 16.0f;
 
     render_background(camera);
 
@@ -428,22 +427,19 @@ void TerrainRenderer::render(const Camera& camera) const {
                 verts[1 + c].color = slope_shading_enabled
                     ? terrain_vertex_color_[vidx]
                     : SDL_Color{255, 255, 255, 255};
-                verts[1 + c].tex_coord = {u0 + static_cast<float>(kCornerCol[c]) / kUPeriod,
-                                           v0 + static_cast<float>(kCornerRow[c]) / kVPeriod};
+                // Diamond UV: du=(dc-dr)/kU, dv=(dc+dr)/kV. Wrap to [0,1) manually
+                // because SDL2's GL backend uses GL_CLAMP_TO_EDGE, not GL_REPEAT.
+                // SW corner gets u_nw-1/kU which can be negative; +1 before fmod fixes it.
+                verts[1 + c].tex_coord = {
+                    std::fmod(u_nw + static_cast<float>(kCornerCol[c] - kCornerRow[c]) / kUPeriod + 1.0f, 1.0f),
+                    std::fmod(v_nw + static_cast<float>(kCornerCol[c] + kCornerRow[c]) / kVPeriod + 1.0f, 1.0f)};
             }
 
-            // Center vertex: forced to sea level for water tiles and land
-            // tiles with a cardinal neighbor that is water.
+            // Center vertex height: average of the 4 corner vertex heights
+            // (the NW corner vertex index for this tile is ty*vw+tx).
             {
-                const bool center_at_sea =
-                    (own_index <= 2) ||
-                    (tx > 0          && texture_index_at(tx - 1, ty) <= 2) ||
-                    (tx < width - 1  && texture_index_at(tx + 1, ty) <= 2) ||
-                    (ty > 0          && texture_index_at(tx, ty - 1) <= 2) ||
-                    (ty < height - 1 && texture_index_at(tx, ty + 1) <= 2);
-                const float center_h_offset = (center_at_sea
-                    ? static_cast<float>(region_->sea_level())
-                    : terrain_vertex_height_[static_cast<std::size_t>(ty) * vw + tx])
+                const float center_h_offset =
+                    terrain_vertex_height_[static_cast<std::size_t>(ty) * vw + tx]
                     * kPixelsPerAltiUnit;
                 Vec2 center_world = tile_to_world(
                     static_cast<float>(tx) + 0.5f,
@@ -461,11 +457,9 @@ void TerrainRenderer::render(const Camera& camera) const {
                                     verts[3].color.b + verts[4].color.b) / 4),
                 static_cast<Uint8>((verts[1].color.a + verts[2].color.a +
                                     verts[3].color.a + verts[4].color.a) / 4)};
-            verts[0].tex_coord = {
-                (verts[1].tex_coord.x + verts[2].tex_coord.x +
-                 verts[3].tex_coord.x + verts[4].tex_coord.x) * 0.25f,
-                (verts[1].tex_coord.y + verts[2].tex_coord.y +
-                 verts[3].tex_coord.y + verts[4].tex_coord.y) * 0.25f};
+            // Center UV: at (tx+0.5, ty+0.5), so u=(tx-ty)/kU=u_nw, v=(tx+ty+1)/kV=v_nw+1/kV.
+            // Wrap v to [0,1): v_nw+1/kV reaches exactly 1.0 when (tx+ty)%kV==kV-1.
+            verts[0].tex_coord = {u_nw, std::fmod(v_nw + 1.0f / kVPeriod, 1.0f)};
 
             // Base pass (Stage A.5 / E): the tile's own texture page, or flat
             // slope-shaded color if textures are disabled.
@@ -574,13 +568,22 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
         if (!atlas.valid() || cell < 0 || cell >= static_cast<int>(std::size(kShoreUvIndex))) {
             return;
         }
+        // Half-texel insets (EXE `0x42acf0`): the sampled diamond is squeezed
+        // inward so the staggered atlas neighbours don't bleed a 1-2px seam
+        // along each cell edge.  `0x5f8cd4 = 1/128` (2 texels) on left/right U,
+        // `0x5f8ccc = 1/256` (1 texel) on top/bottom V, `0x5f8cd0 = 0.002`
+        // biases the shared mid-V (centre + left/right verts) down.
+        constexpr float kShoreInsetU = 1.0f / 128.0f;
+        constexpr float kShoreInsetV = 1.0f / 256.0f;
+        constexpr float kShoreMidVBias = 0.002f;
+
         const auto [idx0, idx1] = kShoreUvIndex[cell];
-        const float left_u  = shore_uv(idx0);
+        const float left_u  = shore_uv(idx0)     + kShoreInsetU;
         const float mid_u   = shore_uv(idx0 + 2);
-        const float right_u = shore_uv(idx0 + 4);
-        const float top_v   = shore_uv(idx1 + 1);
-        const float mid_v   = shore_uv(idx1 + 2);
-        const float bot_v   = shore_uv(idx1 + 3);
+        const float right_u = shore_uv(idx0 + 4) - kShoreInsetU;
+        const float top_v   = shore_uv(idx1 + 1) + kShoreInsetV;
+        const float mid_v   = shore_uv(idx1 + 2) + kShoreMidVBias;
+        const float bot_v   = shore_uv(idx1 + 3) - kShoreInsetV;
 
         SDL_Vertex fan[5];
         fan[0].position = {
@@ -811,8 +814,9 @@ void TerrainRenderer::render_background(const Camera& camera) const {
                 continue;
             }
 
-            const float u0 = static_cast<float>(((tx % 8) + 8) % 8) / kUPeriod;
-            const float v0 = static_cast<float>(((ty % 16) + 16) % 16) / kVPeriod;
+            // Screen-axis-aligned diamond UV: u=(tx-ty)/kU, v=(tx+ty)/kV
+            const float u_nw = static_cast<float>(((((tx - ty) % 8) + 8) % 8)) / kUPeriod;
+            const float v_nw = static_cast<float>(((((tx + ty) % 16) + 16) % 16)) / kVPeriod;
 
             SDL_Vertex verts[5];
             for (int c = 0; c < 4; ++c) {
@@ -825,8 +829,9 @@ void TerrainRenderer::render_background(const Camera& camera) const {
 
                 verts[1 + c].position = {screen_pos.x, screen_pos.y};
                 verts[1 + c].color = {255, 255, 255, 255};
-                verts[1 + c].tex_coord = {u0 + static_cast<float>(kCornerCol[c]) / kUPeriod,
-                                           v0 + static_cast<float>(kCornerRow[c]) / kVPeriod};
+                verts[1 + c].tex_coord = {
+                    std::fmod(u_nw + static_cast<float>(kCornerCol[c] - kCornerRow[c]) / kUPeriod + 1.0f, 1.0f),
+                    std::fmod(v_nw + static_cast<float>(kCornerCol[c] + kCornerRow[c]) / kVPeriod + 1.0f, 1.0f)};
             }
 
             verts[0].position = {
@@ -835,11 +840,7 @@ void TerrainRenderer::render_background(const Camera& camera) const {
                 (verts[1].position.y + verts[2].position.y +
                  verts[3].position.y + verts[4].position.y) * 0.25f};
             verts[0].color = {255, 255, 255, 255};
-            verts[0].tex_coord = {
-                (verts[1].tex_coord.x + verts[2].tex_coord.x +
-                 verts[3].tex_coord.x + verts[4].tex_coord.x) * 0.25f,
-                (verts[1].tex_coord.y + verts[2].tex_coord.y +
-                 verts[3].tex_coord.y + verts[4].tex_coord.y) * 0.25f};
+            verts[0].tex_coord = {u_nw, std::fmod(v_nw + 1.0f / kVPeriod, 1.0f)};
 
             SDL_RenderGeometry(renderer_, hidd_texture_.handle(),
                                verts, 5, kFanIndices, 12);
