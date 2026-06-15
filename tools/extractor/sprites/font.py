@@ -179,6 +179,11 @@ def extract_fonts(font_data: bytes, font_root: DirNode, output_dir: Path) -> lis
                         cap_bottoms[r[1] + r[5]] += 1
             baseline = cap_bottoms.most_common(1)[0][0] if cap_bottoms else m[3]
             metrics["baseline"] = baseline
+            # The binary's stored ascender (-m[0]) is not in pixels; use the
+            # empirical baseline strip row instead, which equals the maximum
+            # above-baseline extent of any glyph (y_off = top_row - baseline,
+            # so baseline = -min(y_off) for the tallest glyphs).
+            metrics["ascender"] = baseline
 
             # Compute the TRUE ink height of a glyph by scanning the strip.
             #
