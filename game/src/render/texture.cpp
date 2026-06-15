@@ -43,4 +43,12 @@ Texture Texture::load(SDL_Renderer* renderer, const std::filesystem::path& path)
     return texture;
 }
 
+Texture Texture::from_raw(SDL_Texture* raw) {
+    if (raw == nullptr) return Texture{};
+    Texture t;
+    t.texture_ = raw;
+    SDL_QueryTexture(raw, nullptr, nullptr, &t.width_, &t.height_);
+    return t;
+}
+
 }  // namespace opente::render

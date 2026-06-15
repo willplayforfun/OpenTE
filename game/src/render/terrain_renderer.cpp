@@ -184,6 +184,43 @@ constexpr float shore_uv(int raw_idx) {
     return raw_idx <= 2 ? 0.0f : static_cast<float>(raw_idx - 2) / 16.0f;
 }
 
+/// Returns a 2× wide + 2× tall render-target texture tiling `src` in a 2×2
+/// grid. The terrain UV formulas index this wider range so that UVs slightly
+/// outside [0,1] (SW corner goes to −1/8 in U; SE/NE go to 1+1/8 in V) land
+/// in the adjacent copy instead of clamping. SDL2 sets GL_CLAMP_TO_EDGE on
+/// every texture it creates, so GL_REPEAT is not available; this is the
+/// portable alternative.
+Texture make_tiled(SDL_Renderer* renderer, const Texture& src) {
+    if (!src.valid()) return Texture{};
+    const int w = src.width();
+    const int h = src.height();
+
+    Uint32 fmt = SDL_PIXELFORMAT_RGBA8888;
+    SDL_QueryTexture(src.handle(), &fmt, nullptr, nullptr, nullptr);
+
+    SDL_Texture* tiled = SDL_CreateTexture(renderer, fmt,
+                                           SDL_TEXTUREACCESS_TARGET, w * 2, h * 2);
+    if (tiled == nullptr) return Texture{};
+
+    // Temporarily use BLENDMODE_NONE on the source so alpha is copied
+    // directly (not pre-multiplied into RGB by alpha-blending).
+    SDL_BlendMode orig_blend;
+    SDL_GetTextureBlendMode(src.handle(), &orig_blend);
+    SDL_SetTextureBlendMode(src.handle(), SDL_BLENDMODE_NONE);
+
+    SDL_SetRenderTarget(renderer, tiled);
+    for (int row = 0; row < 2; ++row) {
+        for (int col = 0; col < 2; ++col) {
+            const SDL_Rect dst = {col * w, row * h, w, h};
+            SDL_RenderCopy(renderer, src.handle(), nullptr, &dst);
+        }
+    }
+    SDL_SetRenderTarget(renderer, nullptr);
+
+    SDL_SetTextureBlendMode(src.handle(), orig_blend);
+    return Texture::from_raw(tiled);
+}
+
 }  // namespace
 
 TerrainRenderer::TerrainRenderer(SDL_Renderer* renderer, const world::Region& region)
@@ -305,7 +342,14 @@ void TerrainRenderer::load_textures(const std::filesystem::path& game_data_dir,
             continue;
         }
         if (const std::optional<std::filesystem::path> path = find_sprite_file(pages[i])) {
-            terrain_page_textures_[i + 1] = Texture::load(renderer_, *path);
+            const Texture src = Texture::load(renderer_, *path);
+            terrain_page_textures_[i + 1] = make_tiled(renderer_, src);
+            if (terrain_page_textures_[i + 1].valid()) {
+                // Terrain tiles are fully opaque; BLENDMODE_NONE avoids SDL2
+                // auto-applying BLEND from the PNG alpha channel.
+                SDL_SetTextureBlendMode(terrain_page_textures_[i + 1].handle(),
+                                        SDL_BLENDMODE_NONE);
+            }
         }
     }
 
@@ -338,7 +382,11 @@ void TerrainRenderer::load_textures(const std::filesystem::path& game_data_dir,
     const std::string hidd_sprite_id = j.value("hidd", std::string{});
     if (!hidd_sprite_id.empty()) {
         if (const std::optional<std::filesystem::path> path = find_sprite_file(hidd_sprite_id)) {
-            hidd_texture_ = Texture::load(renderer_, *path);
+            const Texture src = Texture::load(renderer_, *path);
+            hidd_texture_ = make_tiled(renderer_, src);
+            if (hidd_texture_.valid()) {
+                SDL_SetTextureBlendMode(hidd_texture_.handle(), SDL_BLENDMODE_NONE);
+            }
         }
     }
 }
@@ -381,10 +429,15 @@ void TerrainRenderer::render(const Camera& camera) const {
     //   SW (dc=0,dr=1): du=-1, dv=+1
     // i.e. du = (dc-dr)/kU, dv = (dc+dr)/kV.
     //
-    // The SW corner's u = u_nw - 1/kU can be slightly negative and the SE
-    // corner's v = v_nw + 2/kV can slightly exceed 1; both require the GPU's
-    // default GL_REPEAT wrap mode, which is the OpenGL default and is active
-    // for SDL_RenderGeometry since SDL2's GL renderer does not override it.
+    // SDL2 sets GL_CLAMP_TO_EDGE on every texture (no GL_REPEAT), so raw UVs
+    // outside [0,1] must be avoided. The terrain page textures are 2×-wide +
+    // 2×-tall tiled copies (built in load_textures via make_tiled), so the
+    // safe addressable range is wider.  The UV formulas are:
+    //
+    //   u_tex = (u_raw + 1.0) * 0.5    // u_raw ∈ [-1/8, 1] → u_tex ∈ [7/16, 1]
+    //   v_tex = v_raw * 0.5             // v_raw ∈ [0, 1+2/16] → v_tex ∈ [0, ~0.56]
+    //
+    // No fmod or per-quad conditionals needed.
     //
     // Corner order is fixed as NW, NE, SE, SW for every pass below (base,
     // Stage C shore overlays).
@@ -427,12 +480,13 @@ void TerrainRenderer::render(const Camera& camera) const {
                 verts[1 + c].color = slope_shading_enabled
                     ? terrain_vertex_color_[vidx]
                     : SDL_Color{255, 255, 255, 255};
-                // Diamond UV: du=(dc-dr)/kU, dv=(dc+dr)/kV. Wrap to [0,1) manually
-                // because SDL2's GL backend uses GL_CLAMP_TO_EDGE, not GL_REPEAT.
-                // SW corner gets u_nw-1/kU which can be negative; +1 before fmod fixes it.
+                // u_raw + 1.0 shifts the [-1/8, 1] range into [7/8, 2], then *0.5
+                // maps to [7/16, 1] in the 2×-wide tiled texture — always in range.
+                // v_raw is always ≥ 0, and *0.5 maps [0, 1+2/16] to [0, ~0.56]
+                // in the 2×-tall tiled texture — also always in range.
                 verts[1 + c].tex_coord = {
-                    std::fmod(u_nw + static_cast<float>(kCornerCol[c] - kCornerRow[c]) / kUPeriod + 1.0f, 1.0f),
-                    std::fmod(v_nw + static_cast<float>(kCornerCol[c] + kCornerRow[c]) / kVPeriod + 1.0f, 1.0f)};
+                    (u_nw + static_cast<float>(kCornerCol[c] - kCornerRow[c]) / kUPeriod + 1.0f) * 0.5f,
+                    (v_nw + static_cast<float>(kCornerCol[c] + kCornerRow[c]) / kVPeriod) * 0.5f};
             }
 
             // Center vertex height: average of the 4 corner vertex heights
@@ -457,9 +511,8 @@ void TerrainRenderer::render(const Camera& camera) const {
                                     verts[3].color.b + verts[4].color.b) / 4),
                 static_cast<Uint8>((verts[1].color.a + verts[2].color.a +
                                     verts[3].color.a + verts[4].color.a) / 4)};
-            // Center UV: at (tx+0.5, ty+0.5), so u=(tx-ty)/kU=u_nw, v=(tx+ty+1)/kV=v_nw+1/kV.
-            // Wrap v to [0,1): v_nw+1/kV reaches exactly 1.0 when (tx+ty)%kV==kV-1.
-            verts[0].tex_coord = {u_nw, std::fmod(v_nw + 1.0f / kVPeriod, 1.0f)};
+            // Center UV: at (tx+0.5, ty+0.5), u_raw = u_nw, v_raw = v_nw + 1/kV.
+            verts[0].tex_coord = {(u_nw + 1.0f) * 0.5f, (v_nw + 1.0f / kVPeriod) * 0.5f};
 
             // Base pass (Stage A.5 / E): the tile's own texture page, or flat
             // slope-shaded color if textures are disabled.
@@ -830,8 +883,8 @@ void TerrainRenderer::render_background(const Camera& camera) const {
                 verts[1 + c].position = {screen_pos.x, screen_pos.y};
                 verts[1 + c].color = {255, 255, 255, 255};
                 verts[1 + c].tex_coord = {
-                    std::fmod(u_nw + static_cast<float>(kCornerCol[c] - kCornerRow[c]) / kUPeriod + 1.0f, 1.0f),
-                    std::fmod(v_nw + static_cast<float>(kCornerCol[c] + kCornerRow[c]) / kVPeriod + 1.0f, 1.0f)};
+                    (u_nw + static_cast<float>(kCornerCol[c] - kCornerRow[c]) / kUPeriod + 1.0f) * 0.5f,
+                    (v_nw + static_cast<float>(kCornerCol[c] + kCornerRow[c]) / kVPeriod) * 0.5f};
             }
 
             verts[0].position = {
@@ -840,7 +893,7 @@ void TerrainRenderer::render_background(const Camera& camera) const {
                 (verts[1].position.y + verts[2].position.y +
                  verts[3].position.y + verts[4].position.y) * 0.25f};
             verts[0].color = {255, 255, 255, 255};
-            verts[0].tex_coord = {u_nw, std::fmod(v_nw + 1.0f / kVPeriod, 1.0f)};
+            verts[0].tex_coord = {(u_nw + 1.0f) * 0.5f, (v_nw + 1.0f / kVPeriod) * 0.5f};
 
             SDL_RenderGeometry(renderer_, hidd_texture_.handle(),
                                verts, 5, kFanIndices, 12);

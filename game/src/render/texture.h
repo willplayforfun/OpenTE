@@ -27,6 +27,10 @@ public:
     /// Returns an empty (invalid) Texture and logs an error on failure.
     static Texture load(SDL_Renderer* renderer, const std::filesystem::path& path);
 
+    /// Takes ownership of a raw SDL_Texture (e.g. one created as a render
+    /// target). Returns an invalid Texture if `raw` is nullptr.
+    static Texture from_raw(SDL_Texture* raw);
+
     bool valid() const { return texture_ != nullptr; }
     SDL_Texture* handle() const { return texture_; }
     int width() const { return width_; }
