@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include <SDL_image.h>
 #include <nlohmann/json.hpp>
 
 #include "data/registry.h"
@@ -18,38 +19,39 @@ constexpr const char* kShoreAtlasSpriteIds[2] = {"terrain.coa0", "terrain.coa1"}
 constexpr const char* kEdgeSpriteId = "terrain.edge";
 constexpr const char* kHiddSpriteId = "terrain.hidd";
 
-/// Returns a 2× wide + 2× tall render-target texture tiling `src` in a 2×2
-/// grid. The terrain UV formulas index this wider range so that UVs slightly
-/// outside [0,1] land in the adjacent copy instead of clamping.
-Texture make_tiled(SDL_Renderer* renderer, const Texture& src) {
-    if (!src.valid()) return Texture{};
-    const int w = src.width();
-    const int h = src.height();
+/// Returns a 2×-wide + 2×-tall static texture tiling `path`'s image in a 2×2
+/// grid. CPU surface blitting produces SDL_TEXTUREACCESS_STATIC, which
+/// survives window resizes (unlike an SDL_TEXTUREACCESS_TARGET render target,
+/// whose contents are lost when D3D resets the swap chain on resize).
+Texture make_tiled(SDL_Renderer* renderer, const std::filesystem::path& path) {
+    SDL_Surface* src = IMG_Load(path.string().c_str());
+    if (!src) return Texture{};
 
-    Uint32 fmt = SDL_PIXELFORMAT_RGBA8888;
-    SDL_QueryTexture(src.handle(), &fmt, nullptr, nullptr, nullptr);
+    SDL_Surface* src32 = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA8888, 0);
+    SDL_FreeSurface(src);
+    if (!src32) return Texture{};
 
-    SDL_Texture* tiled = SDL_CreateTexture(renderer, fmt,
-                                           SDL_TEXTUREACCESS_TARGET, w * 2, h * 2);
-    if (tiled == nullptr) return Texture{};
+    const int w = src32->w;
+    const int h = src32->h;
+    SDL_Surface* tiled = SDL_CreateRGBSurfaceWithFormat(0, w * 2, h * 2, 32,
+                                                        SDL_PIXELFORMAT_RGBA8888);
+    if (!tiled) {
+        SDL_FreeSurface(src32);
+        return Texture{};
+    }
 
-    // Temporarily use BLENDMODE_NONE on the source so alpha is copied
-    // directly (not pre-multiplied into RGB by alpha-blending).
-    SDL_BlendMode orig_blend;
-    SDL_GetTextureBlendMode(src.handle(), &orig_blend);
-    SDL_SetTextureBlendMode(src.handle(), SDL_BLENDMODE_NONE);
-
-    SDL_SetRenderTarget(renderer, tiled);
+    SDL_SetSurfaceBlendMode(src32, SDL_BLENDMODE_NONE);
     for (int row = 0; row < 2; ++row) {
         for (int col = 0; col < 2; ++col) {
-            const SDL_Rect dst = {col * w, row * h, w, h};
-            SDL_RenderCopy(renderer, src.handle(), nullptr, &dst);
+            SDL_Rect dst = {col * w, row * h, w, h};
+            SDL_BlitSurface(src32, nullptr, tiled, &dst);
         }
     }
-    SDL_SetRenderTarget(renderer, nullptr);
+    SDL_FreeSurface(src32);
 
-    SDL_SetTextureBlendMode(src.handle(), orig_blend);
-    return Texture::from_raw(tiled);
+    SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, tiled);
+    SDL_FreeSurface(tiled);
+    return tex ? Texture::from_raw(tex) : Texture{};
 }
 
 }  // namespace
@@ -114,8 +116,7 @@ TerrainTileset TerrainTileset::load(SDL_Renderer* renderer,
     for (std::size_t i = 1; i < pages.size() && i < ts.pages_.size(); ++i) {
         if (pages[i].empty()) continue;
         if (const auto path = find_sprite_file(pages[i])) {
-            const Texture src = Texture::load(renderer, *path);
-            ts.pages_[i] = make_tiled(renderer, src);
+            ts.pages_[i] = make_tiled(renderer, *path);
             if (ts.pages_[i].valid()) {
                 // Terrain tiles are fully opaque; BLENDMODE_NONE avoids SDL2
                 // auto-applying BLEND from the PNG alpha channel.
@@ -153,8 +154,7 @@ TerrainTileset TerrainTileset::load(SDL_Renderer* renderer,
     const std::string hidd_sprite_id = cj.value("hidd", std::string{});
     if (!hidd_sprite_id.empty()) {
         if (const auto path = find_sprite_file(hidd_sprite_id)) {
-            const Texture src = Texture::load(renderer, *path);
-            ts.hidd_ = make_tiled(renderer, src);
+            ts.hidd_ = make_tiled(renderer, *path);
             if (ts.hidd_.valid()) {
                 SDL_SetTextureBlendMode(ts.hidd_.handle(), SDL_BLENDMODE_NONE);
             }
