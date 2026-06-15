@@ -23,10 +23,7 @@ constexpr const char* kTerrainIndexLabels[14] = {
 /// edges get a visible cliff face.
 constexpr float kSkirtExtension = 16.0f;
 
-/// Skirt vertex color attenuation: cliff faces are less directly lit than
-/// the terrain surface. The texture gradient provides most of the shading;
-/// these factors add a slight additional dim so the skirt doesn't pop
-/// against the terrain edge it's attached to.
+/// Skirt vertex color: cliff faces use a fixed top/bottom gradient
 constexpr float kSkirtTopShade = 0.80f;
 constexpr float kSkirtBottomShade = 0.55f;
 
@@ -540,14 +537,8 @@ void TerrainRenderer::render_skirts(const Camera& camera) const {
         const Vec2 bsp0 = camera.world_to_screen(bwp0);
         const Vec2 bsp1 = camera.world_to_screen(bwp1);
 
-        const SDL_Color vc0 = slope_shading_enabled
-            ? terrain_vertex_color_[vidx0] : SDL_Color{255, 255, 255, 255};
-        const SDL_Color vc1 = slope_shading_enabled
-            ? terrain_vertex_color_[vidx1] : SDL_Color{255, 255, 255, 255};
-        const SDL_Color tc0 = dim_color(vc0, kSkirtTopShade);
-        const SDL_Color tc1 = dim_color(vc1, kSkirtTopShade);
-        const SDL_Color bc0 = dim_color(vc0, kSkirtBottomShade);
-        const SDL_Color bc1 = dim_color(vc1, kSkirtBottomShade);
+        const SDL_Color tc = dim_color({255, 255, 255, 255}, kSkirtTopShade);
+        const SDL_Color bc = dim_color({255, 255, 255, 255}, kSkirtBottomShade);
 
         // U: fmod-based tiling along the edge, same period as the terrain
         // base pass, so each segment advances 1/kSkirtUPeriod in U space.
@@ -562,10 +553,10 @@ void TerrainRenderer::render_skirts(const Camera& camera) const {
         const float v_top1 = std::min(1.0f, (h1 - bottom_height) * v_per_alti);
 
         SDL_Vertex verts[4] = {
-            {{sp0.x, sp0.y}, tc0, {u0, v_top0}},
-            {{sp1.x, sp1.y}, tc1, {u1, v_top1}},
-            {{bsp1.x, bsp1.y}, bc1, {u1, 0.0f}},
-            {{bsp0.x, bsp0.y}, bc0, {u0, 0.0f}},
+            {{sp0.x, sp0.y}, tc, {u0, v_top0}},
+            {{sp1.x, sp1.y}, tc, {u1, v_top1}},
+            {{bsp1.x, bsp1.y}, bc, {u1, 0.0f}},
+            {{bsp0.x, bsp0.y}, bc, {u0, 0.0f}},
         };
         SDL_RenderGeometry(renderer_, tex, verts, 4, kQuadIndices, 6);
     };
