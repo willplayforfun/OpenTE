@@ -42,7 +42,7 @@ jobs:
         run: cmake --build --preset ${{ matrix.build-preset }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact-name }}
           path: ${{ matrix.binary-dir }}
@@ -72,7 +72,7 @@ jobs:
         run: pyinstaller --onefile --name opente-extract run_extractor.py
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact-name }}
           path: tools/dist/${{ matrix.binary-name }}
@@ -81,8 +81,10 @@ jobs:
     needs: [build-game, build-extractor]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -100,7 +102,7 @@ jobs:
           ls -la *.zip
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: '*.zip'
           generate_release_notes: true
