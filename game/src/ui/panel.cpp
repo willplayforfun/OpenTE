@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "render/font.h"
+
 namespace opente::ui {
 
 // ---------------------------------------------------------------------------
@@ -31,7 +33,7 @@ void Panel::layout(Rect bounds) {
     }
 }
 
-void Panel::render(SDL_Renderer* renderer, TTF_Font* font) const {
+void Panel::render(SDL_Renderer* renderer, Font* font) const {
     if (bg_.a > 0) {
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         SDL_SetRenderDrawColor(renderer, bg_.r, bg_.g, bg_.b, bg_.a);
@@ -44,7 +46,6 @@ void Panel::render(SDL_Renderer* renderer, TTF_Font* font) const {
 }
 
 bool Panel::handle_event(const SDL_Event& e) {
-    // Dispatch to children in reverse order (top-most child first).
     for (auto it = children_.rbegin(); it != children_.rend(); ++it) {
         if (it->widget->handle_event(e)) return true;
     }
@@ -55,45 +56,19 @@ bool Panel::handle_event(const SDL_Event& e) {
 // Label
 // ---------------------------------------------------------------------------
 
-void Label::invalidate_cache() const {
-    if (tex_) {
-        SDL_DestroyTexture(tex_);
-        tex_ = nullptr;
-        tex_w_ = tex_h_ = 0;
-    }
-    cached_text_.clear();
-    cached_font_ = nullptr;
-}
+void Label::render(SDL_Renderer* renderer, Font* font) const {
+    if (font && !text_.empty()) {
+        const int text_w = font->measure_text(text_.c_str());
+        const int text_h = font->ascender() + font->descender();
+        const int dy = (bounds_.h - text_h) / 2;
+        const int baseline_y = bounds_.y + dy + font->ascender();
 
-void Label::rebuild_cache(SDL_Renderer* renderer, TTF_Font* font) const {
-    invalidate_cache();
-    if (!font || text_.empty()) return;
-
-    SDL_Surface* surf = TTF_RenderUTF8_Blended(font, text_.c_str(), color_);
-    if (!surf) return;
-    tex_ = SDL_CreateTextureFromSurface(renderer, surf);
-    tex_w_ = surf->w;
-    tex_h_ = surf->h;
-    SDL_FreeSurface(surf);
-
-    cached_text_ = text_;
-    cached_font_ = font;
-}
-
-void Label::render(SDL_Renderer* renderer, TTF_Font* font) const {
-    if (text_ != cached_text_ || font != cached_font_) {
-        rebuild_cache(renderer, font);
-    }
-
-    if (tex_) {
-        // Vertically centred, 4 px left padding.
-        int dy = (bounds_.h - tex_h_) / 2;
-        SDL_Rect dst{bounds_.x + 4, bounds_.y + dy, tex_w_, tex_h_};
-        // Clip to our own bounds so long text doesn't spill.
         SDL_Rect clip = bounds_.to_sdl();
         SDL_RenderSetClipRect(renderer, &clip);
-        SDL_RenderCopy(renderer, tex_, nullptr, &dst);
+        font->draw_text(renderer, text_.c_str(), bounds_.x + 4, baseline_y, color_);
         SDL_RenderSetClipRect(renderer, nullptr);
+
+        (void)text_w;  // used above for clipping; suppress unused warning
     } else if (!text_.empty()) {
         // Placeholder: a dim line so the layout is still visible.
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -113,14 +88,13 @@ void Button::layout(Rect bounds) {
     label_widget_.layout(bounds);
 }
 
-void Button::render(SDL_Renderer* renderer, TTF_Font* font) const {
+void Button::render(SDL_Renderer* renderer, Font* font) const {
     const SDL_Color& bg = pressed_ ? bg_pressed_ : (hovered_ ? bg_hover_ : bg_normal_);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, bg.r, bg.g, bg.b, bg.a);
     SDL_Rect r = bounds_.to_sdl();
     SDL_RenderFillRect(renderer, &r);
 
-    // Subtle border.
     SDL_SetRenderDrawColor(renderer, 120, 120, 160, 180);
     SDL_RenderDrawRect(renderer, &r);
 
@@ -130,7 +104,7 @@ void Button::render(SDL_Renderer* renderer, TTF_Font* font) const {
 bool Button::handle_event(const SDL_Event& e) {
     if (e.type == SDL_MOUSEMOTION) {
         hovered_ = bounds_.contains(e.motion.x, e.motion.y);
-        return false;  // motion doesn't consume
+        return false;
     }
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
         if (bounds_.contains(e.button.x, e.button.y)) {
@@ -161,13 +135,12 @@ void ScrollPanel::layout(Rect bounds) {
     }
 }
 
-void ScrollPanel::render(SDL_Renderer* renderer, TTF_Font* font) const {
+void ScrollPanel::render(SDL_Renderer* renderer, Font* font) const {
     SDL_Rect clip = bounds_.to_sdl();
     SDL_RenderSetClipRect(renderer, &clip);
     if (content_) content_->render(renderer, font);
     SDL_RenderSetClipRect(renderer, nullptr);
 
-    // Scrollbar track + thumb.
     if (content_height_ > bounds_.h) {
         const int track_x = bounds_.x + bounds_.w - 6;
         const int track_h = bounds_.h;

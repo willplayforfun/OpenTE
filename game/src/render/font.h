@@ -1,0 +1,78 @@
+#pragma once
+
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include <SDL.h>
+
+namespace opente::render {
+
+/// Bitmap font loaded from an extracted Trade Empires glyph atlas.
+///
+/// Each face/size pair (e.g. "clea" at 12pt) is one BitmapFont instance.
+/// Load with BitmapFont::load(); draw with draw_text().
+///
+/// Atlas format (written by OpenTE extractor `sprites/font.py`):
+///   - RGBA PNG, white ink (R=G=B=255), alpha = glyph coverage [0-255].
+///   - Y-flipped relative to on-disk storage so glyph-top is at low y.
+///   - Source rect for glyph i:
+///       x = glyphs[i].atlas_x,  y = glyphs[i].atlas_y,
+///       w = glyphs[i].slot_w,   h = glyphs[i].ink_h
+///   - Destination: (cursor_x, baseline_y - ink_h + 1)
+///     The source rect bottom (atlas_y + ink_h - 1) always aligns with baseline_y.
+///
+/// Text colour is applied via SDL_SetTextureColorMod.
+/// SDL_BLENDMODE_BLEND is set on the texture at load time.
+class BitmapFont {
+public:
+    ~BitmapFont();
+
+    BitmapFont(const BitmapFont&)            = delete;
+    BitmapFont& operator=(const BitmapFont&) = delete;
+
+    /// Loads the font from `json_path` (e.g. `.../game_data/fonts/clea_12pt.json`).
+    /// The PNG atlas is expected at the same directory with the `_atlas.png` suffix.
+    /// Returns nullptr on failure (missing file, parse error, SDL texture error).
+    static std::unique_ptr<BitmapFont> load(SDL_Renderer* renderer,
+                                            const std::filesystem::path& json_path);
+
+    /// Draws UTF-8 text with its baseline at (x, baseline_y).
+    /// `color` sets the ink colour; alpha is multiplied with glyph coverage.
+    void draw_text(SDL_Renderer* renderer,
+                   const char* text,
+                   int x, int baseline_y,
+                   SDL_Color color) const;
+
+    /// Returns the pixel width of `text` (sum of advance widths).
+    int measure_text(const char* text) const;
+
+    int line_height() const noexcept { return line_height_; }
+    int ascender()    const noexcept { return ascender_; }
+    int descender()   const noexcept { return descender_; }
+
+private:
+    struct GlyphInfo {
+        int atlas_x = 0;
+        int atlas_y = 0;   // top of ink in the Y-flipped atlas PNG
+        int slot_w  = 0;
+        int ink_h   = 0;
+        int advance = 0;
+    };
+
+    BitmapFont() = default;
+
+    // Map a Unicode codepoint to a glyph index via the dense cmap array.
+    int codepoint_to_glyph(uint32_t cp) const noexcept;
+
+    SDL_Texture* atlas_     = nullptr;
+    int          line_height_ = 0;
+    int          ascender_    = 0;
+    int          descender_   = 0;   // positive = below baseline
+
+    std::vector<uint16_t> cmap_;     // dense: cmap[cp] = glyph_index
+    std::vector<GlyphInfo> glyphs_;
+};
+
+}  // namespace opente::render

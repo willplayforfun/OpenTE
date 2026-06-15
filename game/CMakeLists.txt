@@ -18,7 +18,6 @@ endif()
 
 find_package(SDL2 CONFIG REQUIRED)
 find_package(SDL2_image CONFIG REQUIRED)
-find_package(SDL2_ttf CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 
@@ -26,8 +25,12 @@ add_executable(opente
     src/main.cpp
     src/core/app.cpp
     src/core/paths.cpp
+    src/core/scene_manager.cpp
+    src/gameplay/gameplay_scene.cpp
     src/data/registry.cpp
+    src/render/font.cpp
     src/render/terrain_renderer.cpp
+    src/render/terrain_tileset.cpp
     src/render/texture.cpp
     src/world/region.cpp
     src/world/world.cpp
@@ -42,7 +45,6 @@ target_link_libraries(opente PRIVATE
     $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
     $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
     $<IF:$<TARGET_EXISTS:SDL2_image::SDL2_image>,SDL2_image::SDL2_image,SDL2_image::SDL2_image-static>
-    $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
     nlohmann_json::nlohmann_json
     imgui::imgui
 )

@@ -80,7 +80,10 @@ def extract_ui_sprites(
     entries: list[SpriteEntry] = []
     skipped = 0
 
-    for path_parts, leaf in leaves:
+    total = len(leaves)
+    for i, (path_parts, leaf) in enumerate(leaves, 1):
+        sprite_label = ".".join(path_parts)
+        print(f"  [{i}/{total}] {container_name}: {sprite_label:<60}", end="\r", flush=True)
         sprite = decode_sprite(data, leaf.abs_off, leaf.size)
         if sprite is None:
             skipped += 1
@@ -105,7 +108,7 @@ def extract_ui_sprites(
             anchor_y=sprite.anchor_y,
         ))
 
-    if skipped:
-        print(f"    ({skipped} non-sprite leaves skipped in {container_name})")
+    print(f"  {container_name}: {len(entries)} sprites written" +
+          (f" ({skipped} skipped)" if skipped else "") + " " * 40)
 
     return entries

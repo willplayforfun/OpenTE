@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "render/font.h"
 #include "ui/widget.h"
 
 namespace opente::ui {
@@ -29,7 +30,7 @@ public:
     void add_child(std::unique_ptr<Widget> child, Rect local_rect);
 
     void layout(Rect bounds) override;
-    void render(SDL_Renderer* renderer, TTF_Font* font) const override;
+    void render(SDL_Renderer* renderer, Font* font) const override;
     bool handle_event(const SDL_Event& e) override;
 
 protected:
@@ -49,9 +50,8 @@ private:
 // Label — static text (or tinted rect if no font is available)
 // ---------------------------------------------------------------------------
 
-/// Renders a UTF-8 text string using SDL_ttf. The text texture is cached and
-/// only regenerated when the text or font changes. Vertically centred within
-/// bounds; horizontally offset by 4 px from the left edge.
+/// Renders a UTF-8 text string using the extracted Trade Empires bitmap font.
+/// Vertically centred within bounds; horizontally offset by 4 px from the left.
 ///
 /// When `font` is null the label draws a semi-transparent tinted rect as a
 /// placeholder so the layout remains visible.
@@ -60,27 +60,15 @@ public:
     explicit Label(std::string text, SDL_Color color = {230, 220, 200, 255})
         : text_(std::move(text)), color_(color) {}
 
-    ~Label() override { invalidate_cache(); }
-
-    void set_text(std::string text) {
-        if (text != text_) { text_ = std::move(text); invalidate_cache(); }
-    }
+    void set_text(std::string text) { text_ = std::move(text); }
     const std::string& text() const { return text_; }
 
-    void render(SDL_Renderer* renderer, TTF_Font* font) const override;
+    void render(SDL_Renderer* renderer, Font* font) const override;
     bool handle_event(const SDL_Event& /*e*/) override { return false; }
 
 private:
-    void invalidate_cache() const;
-    void rebuild_cache(SDL_Renderer* renderer, TTF_Font* font) const;
-
     std::string text_;
     SDL_Color color_;
-
-    mutable SDL_Texture* tex_ = nullptr;
-    mutable int tex_w_ = 0, tex_h_ = 0;
-    mutable std::string cached_text_;
-    mutable TTF_Font* cached_font_ = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -104,7 +92,7 @@ public:
           bg_pressed_(bg_pressed) {}
 
     void layout(Rect bounds) override;
-    void render(SDL_Renderer* renderer, TTF_Font* font) const override;
+    void render(SDL_Renderer* renderer, Font* font) const override;
     bool handle_event(const SDL_Event& e) override;
 
 private:
@@ -130,7 +118,7 @@ public:
         : content_(std::move(content)), content_height_(content_height) {}
 
     void layout(Rect bounds) override;
-    void render(SDL_Renderer* renderer, TTF_Font* font) const override;
+    void render(SDL_Renderer* renderer, Font* font) const override;
     bool handle_event(const SDL_Event& e) override;
 
     /// Scrolls so that a vertical range [top, bottom) is visible.

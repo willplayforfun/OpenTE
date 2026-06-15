@@ -1,9 +1,12 @@
 #pragma once
 
 #include <SDL.h>
-#include <SDL_ttf.h>
+
+namespace opente::render { class BitmapFont; }
 
 namespace opente::ui {
+
+using Font = opente::render::BitmapFont;
 
 /// Screen-space rectangle used for widget bounds and hit-testing.
 struct Rect {
@@ -19,9 +22,9 @@ struct Rect {
 ///   1. layout(bounds) — called once (or on window resize) to assign bounds.
 ///   2. render()/handle_event() — called each frame/event thereafter.
 ///
-/// `font` passed to render() may be null if SDL_ttf initialisation failed or
-/// no font file was found; implementations must degrade gracefully (e.g. draw
-/// a tinted rect instead of text).
+/// `font` passed to render() may be null if the bitmap font atlas was not
+/// found; implementations must degrade gracefully (e.g. draw a tinted rect
+/// instead of text).
 ///
 /// Coordinates are always screen-space pixels, unaffected by the game camera.
 class Widget {
@@ -33,7 +36,7 @@ public:
     virtual void layout(Rect bounds) { bounds_ = bounds; }
 
     /// Draws the widget. `font` may be null.
-    virtual void render(SDL_Renderer* renderer, TTF_Font* font) const = 0;
+    virtual void render(SDL_Renderer* renderer, Font* font) const = 0;
 
     /// Handles an SDL event. Returns true if the event was consumed and should
     /// not be forwarded to widgets below this one in the z-order.

@@ -8,6 +8,7 @@
 
 #include "data/types.h"
 #include "ui/panel.h"
+#include "ui/skin.h"
 #include "ui/widget.h"
 
 namespace opente::ui {
@@ -20,25 +21,28 @@ namespace opente::ui {
 /// the 'mark', 'depo', 'prod', 'dema', 'bldg', 'path' sprite tags (verified
 /// from the push/call-0x415fc0 scan of TStructurePanelView @ 0x424940).
 ///
-/// The menu is a fixed-size panel anchored at the top-left corner of the
-/// screen. Stage 8 will replace flat colours with a_ui/d_ui sprite skins.
+/// When a ConsSkin is provided the panel uses the original game's `cons.back`
+/// (306×696) as the background frame, `cons.sele` (240×20) as the row hover
+/// highlight, and the conf/canc buttons at their manifest-specified positions.
+/// Without a skin (or if sprites fail to load) the panel falls back to flat
+/// colours at kFallbackWidth×kFallbackHeight.
 ///
-/// Press B or Escape to close. Clicking a building entry invokes the
-/// `on_select` callback (provided by App) and also closes the menu.
+/// Press B or Escape to close.  Clicking a building entry invokes on_select.
 class BuildMenu : public Widget {
 public:
-    /// Called with the building id when the player selects an entry.
     using OnSelectFn = std::function<void(const std::string& building_id)>;
 
     BuildMenu(const std::map<std::string, data::Building>& buildings,
-              OnSelectFn on_select);
+              OnSelectFn on_select,
+              ConsSkin skin = {});
 
     void layout(Rect window_bounds) override;
-    void render(SDL_Renderer* renderer, TTF_Font* font) const override;
+    void render(SDL_Renderer* renderer, Font* font) const override;
     bool handle_event(const SDL_Event& e) override;
 
-    static constexpr int kMenuWidth  = 270;
-    static constexpr int kMenuHeight = 520;
+    // Fallback dimensions used when no skin is available.
+    static constexpr int kFallbackWidth  = 270;
+    static constexpr int kFallbackHeight = 520;
 
 private:
     struct RowEntry {
@@ -55,30 +59,34 @@ private:
     };
 
     // --- layout constants ---
-    static constexpr int kTitleHeight  = 32;
-    static constexpr int kRowHeight    = 26;
-    static constexpr int kHeaderHeight = 22;
+    static constexpr int kRowHeight    = 24;
+    static constexpr int kHeaderHeight = 20;
     static constexpr int kPadding      = 6;
     static constexpr int kScrollStep   = 48;
 
     std::vector<RowEntry> entries_;  // pre-sorted by category
     OnSelectFn on_select_;
+    ConsSkin skin_;
 
     // Laid-out state (populated by layout()).
-    Rect menu_rect_;   // absolute menu bounds
+    Rect menu_rect_;   // absolute menu bounds (screen space)
     Rect list_rect_;   // absolute bounds of the scrollable list area
+    int dialog_ox_ = 0, dialog_oy_ = 0;  // dialog-origin in screen space
     std::vector<RowWidget> rows_;
     int content_height_ = 0;
-    int scroll_offset_  = 0;  // pixels scrolled from top
+    int scroll_offset_  = 0;
 
-    // Shared panels (background, title).
+    // Hover row index (-1 = none); updated by handle_event for sele drawing.
+    int hover_row_ = -1;
+
+    // Fallback flat-colour panel (used when skin_ is invalid).
     std::unique_ptr<Panel> bg_panel_;
     std::unique_ptr<Label> title_label_;
 
-    // Helpers.
-    void clamp_scroll();
-    int  max_scroll() const noexcept;
-    Rect row_abs_rect(const RowWidget& row) const noexcept;
+    void   clamp_scroll();
+    int    max_scroll() const noexcept;
+    Rect   row_abs_rect(const RowWidget& row) const noexcept;
+    void   render_scrollbar(SDL_Renderer* renderer) const;
 };
 
 }  // namespace opente::ui

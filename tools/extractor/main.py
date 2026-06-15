@@ -28,6 +28,7 @@ from .manifest import Manifest, MapEntry, SpriteEntry, TableEntry, write_manifes
 from .maps.region import extract_map
 from .sprites.buildings import find_building_sprite_path
 from .sprites.decorations import extract_decoration_sprites
+from .sprites.font import extract_fonts
 from .sprites.sprite import decode_sprite, find_leaf, write_png_rgba
 from .sprites.terrain import extract_terrain_textures
 from .sprites.ui import extract_ui_sprites
@@ -180,45 +181,57 @@ def run(game_dir: GameDirectory, output_dir: Path) -> None:
     for entry in table_entries:
         print(f"  wrote table '{entry.id}' -> {entry.file}")
 
+    print("Extracting maps and building sprites...")
     bldg_data, bldg_footer = load(game_dir.data_dir / "bldg.{}")
     bldg_root = parse_tree(bldg_data, bldg_footer)
 
     map_entries, sprite_entries = _extract_maps(game_dir, data_data, data_root, bldg_data, bldg_root,
                                                   tables["buildings"], tables["episodes"], output_dir)
+    for entry in map_entries:
+        print(f"  map '{entry.id}' -> {entry.file}")
 
+    print("Extracting terrain textures...")
     m_ui_data, m_ui_footer = load(game_dir.data_dir / "m_ui,u.{}")
     m_ui_root = parse_tree(m_ui_data, m_ui_footer)
-    sprite_entries += extract_terrain_textures(m_ui_data, m_ui_root, output_dir)
+    terrain_entries = extract_terrain_textures(m_ui_data, m_ui_root, output_dir)
+    sprite_entries += terrain_entries
     table_entries.append(TableEntry(id="terrain_textures", file="tables/terrain_textures.json"))
+    print(f"  {len(terrain_entries)} terrain sprites written")
 
+    print("Extracting decoration sprites...")
     flor_data, flor_footer = load(game_dir.data_dir / "flor.{}")
     flor_root = parse_tree(flor_data, flor_footer)
-    sprite_entries += extract_decoration_sprites(flor_data, flor_root, output_dir)
+    flor_entries = extract_decoration_sprites(flor_data, flor_root, output_dir)
+    sprite_entries += flor_entries
+    print(f"  {len(flor_entries)} decoration sprites written")
 
     # a_ui,6.{}: main game UI sprites in RGB565 (181 leaves across 26 dialog groups).
     # a_ui,5.{} is byte-for-byte identical art in RGB555 -- skipped.
+    print("Extracting a_ui sprites (181 sprites, this takes a while)...")
     a_ui_data, a_ui_footer = load(game_dir.data_dir / "a_ui,6.{}")
     a_ui_root = parse_tree(a_ui_data, a_ui_footer)
     a_ui_entries = extract_ui_sprites("a_ui", a_ui_data, a_ui_root, output_dir)
-    print(f"  extracted {len(a_ui_entries)} a_ui sprites")
     sprite_entries += a_ui_entries
 
     # d_ui,5.{}: debug/dev UI sprites in ARGB4444 with per-pixel alpha (379 leaves).
     # d_ui,6.{} is byte-identical to d_ui,5 -- skipped.
+    print("Extracting d_ui sprites (379 sprites, this takes a while)...")
     d_ui_data, d_ui_footer = load(game_dir.data_dir / "d_ui,5.{}")
     d_ui_root = parse_tree(d_ui_data, d_ui_footer)
     d_ui_entries = extract_ui_sprites("d_ui", d_ui_data, d_ui_root, output_dir)
-    print(f"  extracted {len(d_ui_entries)} d_ui sprites")
     sprite_entries += d_ui_entries
 
-    for entry in map_entries:
-        print(f"  wrote map '{entry.id}' -> {entry.file}")
-    for entry in sprite_entries:
-        print(f"  wrote sprite '{entry.id}' ({entry.width}x{entry.height}) -> {entry.file}")
+    # font.{}: glyph atlases and metrics for all four faces.
+    print("Extracting fonts...")
+    font_data, font_footer = load(game_dir.data_dir / "font.{}")
+    font_root = parse_tree(font_data, font_footer)
+    font_stems = extract_fonts(font_data, font_root, output_dir)
+    print(f"  {len(font_stems)} font face/size pairs written")
 
+    print("Writing manifest...")
     manifest = Manifest(sprites=sprite_entries, tables=table_entries, maps=map_entries)
     manifest_path = write_manifest(output_dir, manifest)
-    print(f"  wrote manifest -> {manifest_path.name}")
+    print(f"  {manifest_path.name} ({len(sprite_entries)} sprites, {len(table_entries)} tables, {len(map_entries)} maps)")
 
     print("Done.")
 
