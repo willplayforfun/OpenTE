@@ -30,6 +30,7 @@ from .sprites.buildings import find_building_sprite_path
 from .sprites.decorations import extract_decoration_sprites
 from .sprites.sprite import decode_sprite, find_leaf, write_png_rgba
 from .sprites.terrain import extract_terrain_textures
+from .sprites.ui import extract_ui_sprites
 from .tables.abilities import extract_abilities
 from .tables.bandits import extract_bandits
 from .tables.buildings import extract_buildings
@@ -193,6 +194,22 @@ def run(game_dir: GameDirectory, output_dir: Path) -> None:
     flor_data, flor_footer = load(game_dir.data_dir / "flor.{}")
     flor_root = parse_tree(flor_data, flor_footer)
     sprite_entries += extract_decoration_sprites(flor_data, flor_root, output_dir)
+
+    # a_ui,6.{}: main game UI sprites in RGB565 (181 leaves across 26 dialog groups).
+    # a_ui,5.{} is byte-for-byte identical art in RGB555 -- skipped.
+    a_ui_data, a_ui_footer = load(game_dir.data_dir / "a_ui,6.{}")
+    a_ui_root = parse_tree(a_ui_data, a_ui_footer)
+    a_ui_entries = extract_ui_sprites("a_ui", a_ui_data, a_ui_root, output_dir)
+    print(f"  extracted {len(a_ui_entries)} a_ui sprites")
+    sprite_entries += a_ui_entries
+
+    # d_ui,5.{}: debug/dev UI sprites in ARGB4444 with per-pixel alpha (379 leaves).
+    # d_ui,6.{} is byte-identical to d_ui,5 -- skipped.
+    d_ui_data, d_ui_footer = load(game_dir.data_dir / "d_ui,5.{}")
+    d_ui_root = parse_tree(d_ui_data, d_ui_footer)
+    d_ui_entries = extract_ui_sprites("d_ui", d_ui_data, d_ui_root, output_dir)
+    print(f"  extracted {len(d_ui_entries)} d_ui sprites")
+    sprite_entries += d_ui_entries
 
     for entry in map_entries:
         print(f"  wrote map '{entry.id}' -> {entry.file}")
