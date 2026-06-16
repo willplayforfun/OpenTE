@@ -31,10 +31,11 @@ _PALETTE_NUM_COLORS = 512
 
 _TRANSPARENT_KEY_RGB = (255, 0, 255)  # DirectDraw magenta colour-key
 
-# 8bpp palette-indexed sprite rows (bpp==1, field3==19) are stored rotated
-# left by this many pixels: the leftmost _ROW_WRAP columns of raw pixel data
-# for a row actually belong at the right edge of that row. See _decode_raw().
-_ROW_WRAP = 4
+# Every bg6a row is stored rotated left by this many BYTES (a surface-pitch
+# artifact): the leftmost _ROW_WRAP_BYTES of raw pixel data for a row actually
+# belong at the right edge of that row. 4 bytes = 4 px at 8bpp, 2 px at 16bpp,
+# 1 px at 32bpp. See _decode_raw().
+_ROW_WRAP_BYTES = 4
 
 
 @dataclass
@@ -57,10 +58,10 @@ def _decode_raw(blob: bytes) -> tuple[int, int, int, int, bytes, int, int, int] 
     `len(blob) - 32 - width*height*bpp` falls in [0, 16]; `field3 == 1`
     forces bpp == 2 (16-bit direct colour).
 
-    For 8bpp palette-indexed sprites (bpp==1, field3==19 -- buildings,
-    trees, etc.), each row is stored rotated left by `_ROW_WRAP` (4) pixels
-    relative to the displayed image, so `pixels` is un-rotated row-by-row
-    before being returned.
+    Every row is stored rotated left by `_ROW_WRAP_BYTES` (4) bytes relative
+    to the displayed image (a surface-pitch artifact: 4 px at 8bpp, 2 px at
+    16bpp, 1 px at 32bpp), so `pixels` is un-rotated row-by-row before being
+    returned.
     """
     if len(blob) < _HEADER_SIZE:
         return None
@@ -86,14 +87,21 @@ def _decode_raw(blob: bytes) -> tuple[int, int, int, int, bytes, int, int, int] 
 
     pixel_bytes = num_pixels * bpp
     pixels = blob[_HEADER_SIZE:_HEADER_SIZE + pixel_bytes]
-    if bpp == 1 and field3 == 19 and width > _ROW_WRAP:
-        # Each row is stored rotated left by _ROW_WRAP pixels: the first
-        # _ROW_WRAP columns of raw pixel data actually belong at the right
-        # edge of the row. Un-rotate so column 0 is the true left edge.
+
+    # Every bg6a row is stored rotated left by a fixed _ROW_WRAP_BYTES (4) — a
+    # surface-pitch artifact: the first 4 bytes of raw pixel data for a row
+    # actually belong at the row's right edge. Un-rotate so column 0 is the
+    # true left edge. This is bytes, not pixels, so it scales with bpp: 4 px at
+    # 8bpp, 2 px at 16bpp, 1 px at 32bpp. (Originally only applied to 8bpp
+    # paletted sprites; it is in fact universal — most visible on narrow sprites
+    # like the 16x120 scrollbar `stdc.vscr`, negligible on wide ones.)
+    row_bytes = width * bpp
+    if _ROW_WRAP_BYTES < row_bytes:
         unrotated = bytearray(pixel_bytes)
         for y in range(height):
-            row = pixels[y * width:(y + 1) * width]
-            unrotated[y * width:(y + 1) * width] = row[_ROW_WRAP:] + row[:_ROW_WRAP]
+            row = pixels[y * row_bytes:(y + 1) * row_bytes]
+            unrotated[y * row_bytes:(y + 1) * row_bytes] = (
+                row[_ROW_WRAP_BYTES:] + row[:_ROW_WRAP_BYTES])
         pixels = bytes(unrotated)
     return width, height, anchor_x, anchor_y, pixels, field3, str_rel, bpp
 
