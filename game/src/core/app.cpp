@@ -103,13 +103,22 @@ int App::run() {
         if (scene_manager_.wants_quit())
             running_ = false;
 
-        // Main menu → gameplay transition (checked between frames so the scene
-        // is never destroyed while it is still on the call stack).
+        // Main menu → gameplay transition.
         if (main_menu_ && main_menu_->wants_start_game()) {
             main_menu_ = nullptr;
-            scene_manager_.set_scene(
-                std::make_unique<gameplay::GameplayScene>(
-                    window_, renderer_, *registry_, kStartMapId));
+            auto gp = std::make_unique<gameplay::GameplayScene>(
+                window_, renderer_, *registry_, kStartMapId);
+            gameplay_scene_ = gp.get();
+            scene_manager_.set_scene(std::move(gp));
+        }
+
+        // Gameplay → main menu transition (game button or ESC returning to menu).
+        if (gameplay_scene_ && gameplay_scene_->wants_main_menu()) {
+            gameplay_scene_ = nullptr;
+            auto mm = std::make_unique<ui::MainMenuScene>(
+                window_, renderer_, *registry_);
+            main_menu_ = mm.get();
+            scene_manager_.set_scene(std::move(mm));
         }
 
         const Uint32 now = SDL_GetTicks();

@@ -71,30 +71,33 @@ void AreaOverlayRenderer::render(SDL_Renderer* renderer,
                                  const std::vector<OverlayTileSet>& overlays) {
     for (const OverlayTileSet& ots : overlays) {
         // 1. Exclusion diamond (drawn first so the footprint renders on top).
+        //    Center = anchor + half footprint, so for 1×1 market buildings = anchor.
+        const int ex_cx = ots.anchor_tx + ots.footprint_w / 2;
+        const int ex_cy = ots.anchor_ty + ots.footprint_h / 2;
         const int si = shape_index(ots.exclusion_shape_id);
         if (si >= 0) {
             const int half   = kShapeHalfHeights[si];
             const int n_rows = half * 2;
             for (int r = 0; r < n_rows; ++r) {
                 const int dy = r - half;
-                const int ty = ots.center_ty + dy;
                 const DiamondExtent& ext = kShapeExtents[si][r];
                 for (int dx = ext.min_dx; dx <= ext.max_dx; ++dx) {
                     render_tile_quad(renderer, camera, terrain,
-                                     ots.center_tx + dx, ty,
-                                     ots.exclusion_color);
+                                     ex_cx + dx, ex_cy + dy,
+                                     kOverlayExclusion);
                 }
             }
         }
 
-        // 2. Footprint rectangle on top.
-        const int fp_left = ots.center_tx - (ots.footprint_w - 1) / 2;
-        const int fp_top  = ots.center_ty - (ots.footprint_h - 1) / 2;
+        // 2. Footprint rectangle on top (anchor = top-left corner).
+        const SDL_Color fp_color = (ots.color_override.a > 0)
+                                       ? ots.color_override
+                                       : (ots.is_valid ? kOverlayValid : kOverlayInvalid);
         for (int dfy = 0; dfy < ots.footprint_h; ++dfy) {
             for (int dfx = 0; dfx < ots.footprint_w; ++dfx) {
                 render_tile_quad(renderer, camera, terrain,
-                                 fp_left + dfx, fp_top + dfy,
-                                 ots.footprint_color);
+                                 ots.anchor_tx + dfx, ots.anchor_ty + dfy,
+                                 fp_color);
             }
         }
     }

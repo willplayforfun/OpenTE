@@ -19,6 +19,8 @@
 #include "ui/skin.h"
 #include "world/world.h"
 
+namespace opente::ui { class HudBars; }
+
 namespace opente::gameplay {
 
 /// The main in-game view: isometric map, camera pan/zoom, build menu, and
@@ -36,7 +38,8 @@ public:
     bool handle_event(const SDL_Event& event) override;
     void update(float dt) override;
     void render() override;
-    bool wants_quit() const override { return wants_quit_; }
+    bool wants_quit()      const override { return wants_quit_; }
+    bool wants_main_menu() const override { return wants_main_menu_; }
 
 private:
     struct AnchoredSprite {
@@ -87,11 +90,13 @@ private:
     int         selected_map_index_ = 0;
 
     bool wants_quit_           = false;
+    bool wants_main_menu_      = false;
     bool show_dev_gui_         = false;
     bool show_lighting_window_ = false;
     bool show_font_test_       = false;
 
-    ui::Widget* build_menu_ptr_ = nullptr;
+    ui::Widget*  build_menu_ptr_ = nullptr;
+    ui::HudBars* hud_ptr_        = nullptr;
 
     // Construction mode.
     ConstructionMode        construction_mode_;

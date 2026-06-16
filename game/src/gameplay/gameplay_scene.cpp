@@ -48,7 +48,36 @@ GameplayScene::GameplayScene(SDL_Window* window,
 
     int win_w = 0, win_h = 0;
     SDL_GetWindowSize(window_, &win_w, &win_h);
-    ui_manager_.set_hud(std::make_unique<ui::HudBars>(), win_w, win_h);
+    auto hud = std::make_unique<ui::HudBars>(renderer_, registry);
+    hud_ptr_ = hud.get();
+    hud->on_mode_clicked = [this](const std::string& tag) {
+        if (tag == "game") {
+            wants_main_menu_ = true;
+            return;
+        }
+        if (tag == "terr" || tag == "regi" || tag == "worl") {
+            // terr = current view (no-op); regi/worl not implemented yet.
+            return;
+        }
+        // Toggle-group buttons (play/rout/cons/tech).
+        // active_mode_ is already updated by the HUD before the callback fires.
+        const bool now_active = (hud_ptr_->active_mode() == tag);
+        if (tag == "cons") {
+            if (now_active) {
+                toggle_build_menu();
+            } else if (build_menu_ptr_) {
+                ui_manager_.close(build_menu_ptr_);
+                build_menu_ptr_ = nullptr;
+            }
+        } else {
+            // play/rout/tech: side panels not implemented; dismiss build menu.
+            if (build_menu_ptr_) {
+                ui_manager_.close(build_menu_ptr_);
+                build_menu_ptr_ = nullptr;
+            }
+        }
+    };
+    ui_manager_.set_hud(std::move(hud), win_w, win_h);
 
     render_defaults_ = {
         render::kSlopeGradientScale,
@@ -93,6 +122,8 @@ void GameplayScene::load_map(const std::string& map_id) {
     std::cout << "Loaded map '" << world_->region().name()
               << "' (culture: " << (culture.empty() ? "unknown" : culture)
               << ", " << world_->region().width() << "x" << world_->region().height() << ")\n";
+
+    if (hud_ptr_) hud_ptr_->set_region_name(world_->region().name());
 
     terrain_renderer_.emplace(renderer_, world_->region());
     terrain_tileset_ = render::TerrainTileset::load(
@@ -225,6 +256,7 @@ bool GameplayScene::handle_event(const SDL_Event& event) {
                             if (build_menu_ptr_) {
                                 ui_manager_.close(build_menu_ptr_);
                                 build_menu_ptr_ = nullptr;
+                                if (hud_ptr_) hud_ptr_->set_active_mode("");
                             }
                         } else {
                             wants_quit_ = true;
@@ -232,7 +264,20 @@ bool GameplayScene::handle_event(const SDL_Event& event) {
                     }
                     return true;
                 case SDLK_b:
-                    if (down) toggle_build_menu();
+                    if (down) {
+                        if (build_menu_ptr_) {
+                            ui_manager_.close(build_menu_ptr_);
+                            build_menu_ptr_ = nullptr;
+                            if (construction_mode_.is_active()) {
+                                construction_mode_.exit();
+                                sim_paused_ = false;
+                            }
+                            if (hud_ptr_) hud_ptr_->set_active_mode("");
+                        } else {
+                            if (hud_ptr_) hud_ptr_->set_active_mode("cons");
+                            toggle_build_menu();
+                        }
+                    }
                     return true;
                 case SDLK_LEFT:  case SDLK_a: pan_left_  = down; return true;
                 case SDLK_RIGHT: case SDLK_d: pan_right_ = down; return true;
@@ -491,29 +536,28 @@ void GameplayScene::render_construction_overlays() {
                                 : construction_mode_.cursor_ty();
 
             render::OverlayTileSet ots;
-            ots.center_tx          = ptx;
-            ots.center_ty          = pty;
+            ots.anchor_tx          = ptx;
+            ots.anchor_ty          = pty;
             ots.footprint_w        = bldg.footprint.width;
             ots.footprint_h        = bldg.footprint.height;
             ots.exclusion_shape_id = bldg.exclusion_shape_id;
-            ots.exclusion_color    = {80,  200, 80,  100};
-            ots.footprint_color    = {255, 230, 60,  180};
+            ots.is_valid           = true;  // TODO Stage 3+: run actual placement check
             overlays.push_back(ots);
         }
     } else if (ph == ConstructionPhase::TrailPlacing) {
-        // Cursor preview tile.
+        // Cursor preview tile — blue to distinguish from building overlays.
         render::OverlayTileSet cursor;
-        cursor.center_tx    = construction_mode_.cursor_tx();
-        cursor.center_ty    = construction_mode_.cursor_ty();
-        cursor.footprint_color = {80, 180, 255, 140};
+        cursor.anchor_tx       = construction_mode_.cursor_tx();
+        cursor.anchor_ty       = construction_mode_.cursor_ty();
+        cursor.color_override  = {80, 180, 255, 140};
         overlays.push_back(cursor);
 
-        // Committed trail markers.
+        // Committed trail markers — slightly brighter blue.
         for (const TrailMarker& m : construction_mode_.trail_markers()) {
             render::OverlayTileSet ms;
-            ms.center_tx       = m.tx;
-            ms.center_ty       = m.ty;
-            ms.footprint_color = {60, 140, 255, 200};
+            ms.anchor_tx      = m.tx;
+            ms.anchor_ty      = m.ty;
+            ms.color_override = {60, 140, 255, 200};
             overlays.push_back(ms);
         }
     }

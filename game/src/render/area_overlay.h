@@ -8,15 +8,33 @@
 
 namespace opente::render {
 
+// Placement-highlight colors (observed directly in the original game).
+// The prior RE analysis found wrong constants for valid/exclusion.
+// Alphas (0x33 for footprint, 0x66 for exclusion) are still from the EXE.
+//   Footprint valid:   green        — D3D ARGB 0x3300ff00 (approx)
+//   Footprint invalid: red          — D3D ARGB 0x33ff0000 (RE-confirmed)
+//   Exclusion diamond: orange/gold  — D3D ARGB 0x66ffc000 (approx)
+inline constexpr SDL_Color kOverlayExclusion = {255, 192,   0, 102};  // orange-gold at 40%
+inline constexpr SDL_Color kOverlayValid     = {  0, 210,   0,  51};  // green at 20%
+inline constexpr SDL_Color kOverlayInvalid   = {255,   0,   0,  51};  // red   at 20%
+
 /// Description of one colored tile region to overlay on the terrain surface.
 struct OverlayTileSet {
-    int center_tx = 0;
-    int center_ty = 0;
-    int footprint_w = 1;        // footprint rectangle width  (tiles)
-    int footprint_h = 1;        // footprint rectangle height (tiles)
-    int exclusion_shape_id = 0; // 0 = footprint only; 4/6/8/10 = add exclusion diamond
-    SDL_Color exclusion_color = {0, 0, 0, 0};
-    SDL_Color footprint_color = {0, 0, 0, 0};
+    // Top-left corner of the building footprint (cursor tile = placement anchor).
+    int anchor_tx = 0;
+    int anchor_ty = 0;
+    int footprint_w = 1;         // footprint rectangle width  (tiles)
+    int footprint_h = 1;         // footprint rectangle height (tiles)
+    int exclusion_shape_id = 0;  // 0 = footprint only; 4/6/8/10 = add exclusion diamond
+
+    // Controls footprint tile color when color_override.a == 0:
+    //   true  → kOverlayValid   (cyan, A=51)   — RE-confirmed HiliteSquare valid path
+    //   false → kOverlayInvalid (red,  A=51)   — RE-confirmed HiliteSquare blocked path
+    bool is_valid = true;
+
+    // Optional explicit footprint color. When .a > 0, overrides the is_valid color.
+    // Use for trail-marker tiles or other non-validity-based highlights.
+    SDL_Color color_override = {0, 0, 0, 0};
 };
 
 /// Draws semi-transparent tile-footprint and exclusion-diamond overlays on the

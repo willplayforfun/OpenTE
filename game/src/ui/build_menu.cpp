@@ -115,11 +115,15 @@ void BuildMenu::set_construction_mode_active(bool active) {
 // layout
 // ---------------------------------------------------------------------------
 
-void BuildMenu::layout(Rect /*window_bounds*/) {
+void BuildMenu::layout(Rect window_bounds) {
     const int panel_w = skin_.valid() ? skin_.background.w  : kFallbackWidth;
     const int panel_h = skin_.valid() ? skin_.background.h  : kFallbackHeight;
 
-    menu_rect_ = {8, 8, panel_w, panel_h};
+    // RE source: toolbar-re.md Phase 2 — bart (top bar) at y=0, h=20 in the
+    // original 1024×768. The panel sits flush below it: x=0 (left edge),
+    // y=20. See also HudBars::kTopBarH in hud.h.
+    static constexpr int kHudTopH = 20;
+    menu_rect_ = {0, kHudTopH, panel_w, panel_h};
     bounds_    = menu_rect_;
 
     if (skin_.valid()) {

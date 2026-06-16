@@ -8,8 +8,9 @@
 #include "core/scene_manager.h"
 #include "data/registry.h"
 
-// Forward-declare to avoid pulling in the full header here.
-namespace opente::ui { class MainMenuScene; }
+// Forward-declare to avoid pulling in the full headers here.
+namespace opente::ui       { class MainMenuScene; }
+namespace opente::gameplay { class GameplayScene; }
 
 namespace opente::core {
 
@@ -39,9 +40,10 @@ private:
     // renderer), ensuring all scene-owned textures are freed in time.
     SceneManager scene_manager_;
 
-    // Non-owning pointer valid while MainMenuScene is the active scene.
-    // Nulled before any scene transition away from the main menu.
-    ui::MainMenuScene* main_menu_ = nullptr;
+    // Non-owning pointers valid while the respective scene is active.
+    // Nulled before any scene transition away from that scene.
+    ui::MainMenuScene*       main_menu_       = nullptr;
+    gameplay::GameplayScene* gameplay_scene_  = nullptr;
 
     bool running_ = false;
 };
