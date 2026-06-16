@@ -88,38 +88,27 @@ void BuildMenu::blit_skin(SDL_Renderer* r, const SkinSprite& s, int ox, int oy,
 }
 
 // ---------------------------------------------------------------------------
-// Constructor
+// Constructor / data setters
 // ---------------------------------------------------------------------------
 
-BuildMenu::BuildMenu(const std::map<std::string, data::Building>& buildings,
-                     OnSelectFn on_select,
-                     ConsSkin skin)
-    : on_select_(std::move(on_select)), skin_(std::move(skin)) {
+BuildMenu::BuildMenu(ConsSkin skin) : skin_(std::move(skin)) {}
 
-    // PATHWAYS tab (index 0) — fixed list of transport types.
-    for (const auto& pw : kPathways) {
-        tab_entries_[0].push_back({pw.id, pw.label, "", 0, true});
-    }
+void BuildMenu::set_data(const BuildMenuData& data) {
+    for (int t = 0; t < kNumTabs; ++t)
+        tab_entries_[t] = data.tabs[t];
+    // Reset selection state when data changes.
+    selected_id_.clear();
+    selected_row_  = -1;
+    scroll_offset_ = 0;
+    hover_row_     = -1;
+}
 
-    // Building tabs (indices 1-4) — filtered by Building::type.
-    for (const auto& [id, bldg] : buildings) {
-        int tab = -1;
-        if      (bldg.type == "mark")              tab = 1;
-        else if (bldg.type == "bdep" ||
-                 bldg.type == "ware")              tab = 2;
-        else if (bldg.type == "bpro")              tab = 3;
-        else if (bldg.type == "bdem")              tab = 4;
-        if (tab < 0) continue;
+void BuildMenu::set_confirm_visible(bool visible) {
+    confirm_visible_ = visible;
+}
 
-        tab_entries_[tab].push_back({id, bldg.name, bldg.desc, bldg.build_cost, false});
-    }
-
-    for (int t = 1; t < kNumTabs; ++t) {
-        std::sort(tab_entries_[t].begin(), tab_entries_[t].end(),
-                  [](const ListEntry& a, const ListEntry& b) {
-                      return a.label < b.label;
-                  });
-    }
+void BuildMenu::set_construction_mode_active(bool active) {
+    construction_mode_active_ = active;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +155,7 @@ void BuildMenu::layout(Rect /*window_bounds*/) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const BuildMenu::ListEntry* BuildMenu::selected_entry() const noexcept {
+const BuildMenuEntry* BuildMenu::selected_entry() const noexcept {
     if (selected_row_ < 0) return nullptr;
     const auto& e = active_entries();
     if (selected_row_ >= static_cast<int>(e.size())) return nullptr;
@@ -273,7 +262,7 @@ void BuildMenu::render_list(SDL_Renderer* r, Font* font) const {
     SDL_Rect clip = list_rect_.to_sdl();
     SDL_RenderSetClipRect(r, &clip);
 
-    const auto& entries = active_entries();
+    const auto& entries = active_entries();  // std::vector<BuildMenuEntry>
     for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
         const int sy = row_screen_y(i);
         if (sy + kRowHeight <= list_rect_.y) continue;
@@ -324,7 +313,7 @@ void BuildMenu::render_preview(SDL_Renderer* r) const {
 
 void BuildMenu::render_info(SDL_Renderer* r, Font* font) const {
 
-    const ListEntry* sel = selected_entry();
+    const BuildMenuEntry* sel = selected_entry();
     if (!sel || !font) return;
 
     const int mx = menu_rect_.x, my = menu_rect_.y;
@@ -384,7 +373,7 @@ void BuildMenu::render_info(SDL_Renderer* r, Font* font) const {
 }
 
 void BuildMenu::render_bottom_buttons(SDL_Renderer* r, Font* font) const {
-    const bool can_confirm = !selected_id_.empty();
+    const bool can_confirm = confirm_visible_;
 
     // Confirm. The sprite is two 32px frames (normal | pressed); draw one.
     if (skin_.valid() && skin_.confirm_btn.valid()) {
@@ -402,7 +391,7 @@ void BuildMenu::render_bottom_buttons(SDL_Renderer* r, Font* font) const {
     }
     {
         std::string label = "CONFIRM";
-        const ListEntry* sel = selected_entry();
+        const BuildMenuEntry* sel = selected_entry();
         if (sel && sel->cost > 0)
             label += " (" + std::to_string(sel->cost) + " coins)";
         draw_left(r, font, conf_rect_.x + 46, conf_rect_.y, conf_rect_.h,
@@ -581,12 +570,13 @@ bool BuildMenu::handle_event(const SDL_Event& e) {
             if (idx >= 0 && idx < static_cast<int>(entries.size())) {
                 selected_row_ = idx;
                 selected_id_  = entries[idx].id;
+                if (on_item_selected) on_item_selected(selected_id_);
             }
             return true;
         }
 
         // Buttons: press on down (show the pressed frame), fire on release.
-        if (!selected_id_.empty() && conf_rect_.contains(mx, my)) {
+        if (confirm_visible_ && conf_rect_.contains(mx, my)) {
             pressed_btn_ = 1;
             return true;
         }
@@ -609,12 +599,12 @@ bool BuildMenu::handle_event(const SDL_Event& e) {
         pressed_btn_ = 0;
         // Clear state before invoking the callback: it may close (delete) this
         // widget, so no member access is allowed afterwards.
-        if (was == 1 && !selected_id_.empty() && conf_rect_.contains(mx, my)) {
-            if (on_select_) on_select_(selected_id_);
+        if (was == 1 && confirm_visible_ && conf_rect_.contains(mx, my)) {
+            if (on_confirm_clicked) on_confirm_clicked();
             return true;
         }
         if (was == 2 && canc_rect_.contains(mx, my)) {
-            if (on_select_) on_select_("");
+            if (on_exit_clicked) on_exit_clicked();
             return true;
         }
         return was != 0;

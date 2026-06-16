@@ -4,11 +4,15 @@
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_sdlrenderer2.h>
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <iostream>
 #include <utility>
 
 #include "render/iso.h"
 #include "ui/build_menu.h"
+#include "ui/hud.h"
 
 namespace opente::gameplay {
 
@@ -41,6 +45,10 @@ GameplayScene::GameplayScene(SDL_Window* window,
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "GameplayScene: UIManager::init failed");
     }
+
+    int win_w = 0, win_h = 0;
+    SDL_GetWindowSize(window_, &win_w, &win_h);
+    ui_manager_.set_hud(std::make_unique<ui::HudBars>(), win_w, win_h);
 
     render_defaults_ = {
         render::kSlopeGradientScale,
@@ -204,7 +212,16 @@ bool GameplayScene::handle_event(const SDL_Event& event) {
             switch (event.key.keysym.sym) {
                 case SDLK_ESCAPE:
                     if (down) {
-                        if (ui_manager_.has_open_dialogs()) {
+                        if (construction_mode_.is_active()) {
+                            // Exit construction mode, keep build menu open.
+                            construction_mode_.exit();
+                            sim_paused_ = false;
+                            if (build_menu_ptr_) {
+                                auto* m = static_cast<ui::BuildMenu*>(build_menu_ptr_);
+                                m->set_construction_mode_active(false);
+                                m->set_confirm_visible(false);
+                            }
+                        } else if (ui_manager_.has_open_dialogs()) {
                             if (build_menu_ptr_) {
                                 ui_manager_.close(build_menu_ptr_);
                                 build_menu_ptr_ = nullptr;
@@ -224,6 +241,48 @@ bool GameplayScene::handle_event(const SDL_Event& event) {
                 default: break;
             }
             break;
+        }
+
+        case SDL_MOUSEMOTION:
+            if (construction_mode_.is_active()) {
+                int tx = 0, ty = 0;
+                if (pick_tile_from_mouse(event.motion.x, event.motion.y, tx, ty))
+                    construction_mode_.on_mouse_move(tx, ty);
+            }
+            return false;  // don't consume — let camera hover work
+
+        case SDL_MOUSEBUTTONDOWN: {
+            if (!construction_mode_.is_active()) break;
+            int tx = 0, ty = 0;
+            if (!pick_tile_from_mouse(event.button.x, event.button.y, tx, ty)) break;
+            construction_mode_.on_mouse_move(tx, ty);
+
+            if (event.button.button == SDL_BUTTON_LEFT) {
+                const bool confirmed = construction_mode_.on_left_click();
+                sim_paused_ = construction_mode_.is_active();
+                if (confirmed) {
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                "Placement confirmed: '%s' at tile (%d, %d)",
+                                construction_mode_.selected_id().c_str(), tx, ty);
+                    // TODO Stage 2+: spawn placed building entity here.
+                }
+                if (build_menu_ptr_) {
+                    auto* m = static_cast<ui::BuildMenu*>(build_menu_ptr_);
+                    m->set_construction_mode_active(construction_mode_.is_active());
+                    m->set_confirm_visible(
+                        construction_mode_.phase() == ConstructionPhase::BuildingPinned);
+                }
+            } else if (event.button.button == SDL_BUTTON_RIGHT) {
+                construction_mode_.on_right_click();
+                sim_paused_ = construction_mode_.is_active();
+                if (build_menu_ptr_) {
+                    auto* m = static_cast<ui::BuildMenu*>(build_menu_ptr_);
+                    m->set_construction_mode_active(construction_mode_.is_active());
+                    m->set_confirm_visible(
+                        construction_mode_.phase() == ConstructionPhase::BuildingPinned);
+                }
+            }
+            return true;
         }
 
         case SDL_MOUSEWHEEL:
@@ -261,10 +320,12 @@ void GameplayScene::render() {
 
     if (world_) {
         terrain_renderer_->render(camera_);
+        render_construction_overlays();  // after terrain, before buildings/decorations
         render_decorations();
         render_buildings();
     }
 
+    render_hud_overlay();  // before UI widgets so they draw on top
     ui_manager_.render();
 
     if (show_font_test_)       render_font_test();
@@ -318,29 +379,180 @@ void GameplayScene::render_buildings() {
 }
 
 void GameplayScene::toggle_build_menu() {
-    if (build_menu_ptr_) {
-        ui_manager_.close(build_menu_ptr_);
-        build_menu_ptr_ = nullptr;
-        return;
+    if (build_menu_ptr_) return;  // B key while open: no-op (keep it open)
+
+    if (!build_menu_data_built_) {
+        rebuild_build_menu_data();
+        build_menu_data_built_ = true;
     }
 
     int win_w = 0, win_h = 0;
     SDL_GetWindowSize(window_, &win_w, &win_h);
 
-    auto menu = std::make_unique<ui::BuildMenu>(
-        registry_->buildings(),
-        [this](const std::string& building_id) {
-            if (!building_id.empty()) {
-                // TODO (Stage 2): enter placement mode for `building_id`.
-                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                            "Build menu selected: %s", building_id.c_str());
-            }
-            ui_manager_.close(build_menu_ptr_);
-            build_menu_ptr_ = nullptr;
-        },
-        cons_skin_);
+    auto menu = std::make_unique<ui::BuildMenu>(cons_skin_);
+    menu->set_data(build_menu_data_);
+    menu->set_construction_mode_active(construction_mode_.is_active());
+    menu->set_confirm_visible(
+        construction_mode_.phase() == ConstructionPhase::BuildingPinned);
+
+    menu->on_item_selected = [this](const std::string& id) {
+        on_build_menu_item_selected(id);
+    };
+    menu->on_confirm_clicked = [this]() {
+        // Confirm = same as a second left-click (already pinned).
+        construction_mode_.on_left_click();
+        sim_paused_ = construction_mode_.is_active();
+        if (build_menu_ptr_) {
+            auto* m = static_cast<ui::BuildMenu*>(build_menu_ptr_);
+            m->set_construction_mode_active(false);
+            m->set_confirm_visible(false);
+        }
+    };
+    menu->on_exit_clicked = [this]() {
+        // Exit construction mode but keep the build menu open.
+        construction_mode_.exit();
+        sim_paused_ = false;
+        if (build_menu_ptr_) {
+            auto* m = static_cast<ui::BuildMenu*>(build_menu_ptr_);
+            m->set_construction_mode_active(false);
+            m->set_confirm_visible(false);
+        }
+    };
+
     build_menu_ptr_ = menu.get();
     ui_manager_.open(std::move(menu), win_w, win_h);
+}
+
+void GameplayScene::rebuild_build_menu_data() {
+    build_menu_data_ = {};
+
+    // Tab 0 — pathways (hardcoded, matching original order).
+    build_menu_data_.tabs[0] = {
+        {"trai", "Trail",    "", 0, true},
+        {"road", "Road",     "", 0, true},
+        {"rail", "Railway",  "", 0, true},
+        {"cana", "Canal",    "", 0, true},
+    };
+
+    // Tabs 1-4 — buildings filtered by type.
+    for (const auto& [id, bldg] : registry_->buildings()) {
+        int tab = -1;
+        if      (bldg.type == "mark")                     tab = 1;
+        else if (bldg.type == "bdep" || bldg.type == "ware") tab = 2;
+        else if (bldg.type == "bpro")                     tab = 3;
+        else if (bldg.type == "bdem")                     tab = 4;
+        if (tab < 0) continue;
+        build_menu_data_.tabs[tab].push_back({id, bldg.name, bldg.desc, bldg.build_cost, false});
+    }
+
+    for (int t = 1; t < ui::BuildMenuData::kNumTabs; ++t) {
+        std::sort(build_menu_data_.tabs[t].begin(), build_menu_data_.tabs[t].end(),
+                  [](const ui::BuildMenuEntry& a, const ui::BuildMenuEntry& b) {
+                      return a.label < b.label;
+                  });
+    }
+}
+
+void GameplayScene::on_build_menu_item_selected(const std::string& id) {
+    if (id.empty()) return;
+    static const std::array<const char*, 4> kPathIds = {"trai", "road", "rail", "cana"};
+    const bool is_path = std::any_of(kPathIds.begin(), kPathIds.end(),
+                                     [&](const char* p) { return id == p; });
+    if (is_path) {
+        construction_mode_.enter_trail(id);
+    } else {
+        construction_mode_.enter_building(id);
+    }
+    sim_paused_ = true;
+    if (build_menu_ptr_) {
+        auto* m = static_cast<ui::BuildMenu*>(build_menu_ptr_);
+        m->set_construction_mode_active(true);
+        m->set_confirm_visible(false);  // becomes true only after pinning
+    }
+}
+
+void GameplayScene::render_construction_overlays() {
+    if (!construction_mode_.is_active() || !terrain_renderer_) return;
+
+    std::vector<render::OverlayTileSet> overlays;
+
+    const ConstructionPhase ph = construction_mode_.phase();
+
+    if (ph == ConstructionPhase::BuildingAiming || ph == ConstructionPhase::BuildingPinned) {
+        const std::string& bid = construction_mode_.selected_id();
+        const auto it = registry_->buildings().find(bid);
+        if (it != registry_->buildings().end()) {
+            const data::Building& bldg = it->second;
+            const int ptx = (ph == ConstructionPhase::BuildingPinned)
+                                ? construction_mode_.pinned_tx()
+                                : construction_mode_.cursor_tx();
+            const int pty = (ph == ConstructionPhase::BuildingPinned)
+                                ? construction_mode_.pinned_ty()
+                                : construction_mode_.cursor_ty();
+
+            render::OverlayTileSet ots;
+            ots.center_tx          = ptx;
+            ots.center_ty          = pty;
+            ots.footprint_w        = bldg.footprint.width;
+            ots.footprint_h        = bldg.footprint.height;
+            ots.exclusion_shape_id = bldg.exclusion_shape_id;
+            ots.exclusion_color    = {80,  200, 80,  100};
+            ots.footprint_color    = {255, 230, 60,  180};
+            overlays.push_back(ots);
+        }
+    } else if (ph == ConstructionPhase::TrailPlacing) {
+        // Cursor preview tile.
+        render::OverlayTileSet cursor;
+        cursor.center_tx    = construction_mode_.cursor_tx();
+        cursor.center_ty    = construction_mode_.cursor_ty();
+        cursor.footprint_color = {80, 180, 255, 140};
+        overlays.push_back(cursor);
+
+        // Committed trail markers.
+        for (const TrailMarker& m : construction_mode_.trail_markers()) {
+            render::OverlayTileSet ms;
+            ms.center_tx       = m.tx;
+            ms.center_ty       = m.ty;
+            ms.footprint_color = {60, 140, 255, 200};
+            overlays.push_back(ms);
+        }
+    }
+
+    if (!overlays.empty())
+        overlay_renderer_.render(renderer_, camera_, *terrain_renderer_, overlays);
+}
+
+void GameplayScene::render_hud_overlay() {
+    if (!sim_paused_) return;
+    render::BitmapFont* font = ui_manager_.font();
+    if (!font) return;
+
+    static constexpr SDL_Color kTextColor  = {255, 220,  60, 255};
+    static constexpr SDL_Color kTextShadow = {  0,   0,   0, 255};
+
+    const char* msg = "Paused: Construction Mode";
+    const int tw = font->measure_text(msg);
+    const int asc = font->ascender();
+    int win_w = 0, win_h = 0;
+    SDL_GetWindowSize(window_, &win_w, &win_h);
+    font->draw_text_shadowed(renderer_, msg,
+                             win_w - tw - 12,
+                             win_h - asc - font->descender() - 12,
+                             kTextColor, kTextShadow);
+}
+
+bool GameplayScene::pick_tile_from_mouse(int screen_x, int screen_y,
+                                          int& out_tx, int& out_ty) const {
+    if (!world_) return false;
+    // screen → world (inverse camera projection)
+    const float wx = static_cast<float>(screen_x) / camera_.zoom
+                     + camera_.world_pixel_offset.x;
+    const float wy = static_cast<float>(screen_y) / camera_.zoom
+                     + camera_.world_pixel_offset.y;
+    const render::Vec2 tile = render::world_to_tile(wx, wy);
+    out_tx = static_cast<int>(std::floor(tile.x));
+    out_ty = static_cast<int>(std::floor(tile.y));
+    return true;
 }
 
 // ---------------------------------------------------------------------------

@@ -60,6 +60,7 @@ struct Building {
     bool religion = false;
     std::optional<std::string> look;
     std::string default_sprite;  // sprites.default
+    int exclusion_shape_id = 0;  // 0=none; 4/6/8/10 for market tiers 1-4
 };
 
 inline void from_json(const nlohmann::json& j, Building& b) {
@@ -78,6 +79,14 @@ inline void from_json(const nlohmann::json& j, Building& b) {
         b.look = j.at("look").get<std::string>();
     }
     b.default_sprite = j.at("sprites").value("default", "");
+    if (b.type == "mark") {
+        try {
+            const int tier = std::stoi(b.category);  // "1"→4, "2"→6, "3"→8, "4"→10
+            b.exclusion_shape_id = tier * 2 + 2;
+        } catch (...) {
+            b.exclusion_shape_id = 0;
+        }
+    }
 }
 
 // --- transporters.json -----------------------------------------------------

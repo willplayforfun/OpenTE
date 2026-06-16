@@ -29,6 +29,10 @@ public:
 
     void shutdown();
 
+    /// Sets the permanent HUD widget (always rendered below the dialog stack).
+    /// Replaces any previously set HUD. Pass nullptr to clear.
+    void set_hud(std::unique_ptr<Widget> hud, int window_w, int window_h);
+
     /// Pushes a non-modal dialog.
     void open(std::unique_ptr<Widget> dialog, int window_w, int window_h);
 
@@ -60,6 +64,7 @@ private:
 
     SDL_Renderer* renderer_ = nullptr;
     render::FontCache fonts_;
+    std::unique_ptr<Widget> hud_;
     std::vector<Entry> stack_;
 };
 

@@ -1,12 +1,10 @@
 #pragma once
 
 #include <functional>
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "data/types.h"
 #include "ui/panel.h"
 #include "ui/skin.h"
 #include "ui/widget.h"
@@ -21,27 +19,49 @@ namespace opente::ui {
 ///   Each tab has its own scrollable building list.
 ///   The 'path' tab shows trai/road/rail/cana transport type choices.
 ///   Below the list: building sprite preview, then info box (name/cost/desc).
-///   Confirm (at +0x540) disabled until item selected; shows cost in label.
+///   Confirm (at +0x540) enabled when set_confirm_visible(true); shows cost.
 ///   Cancel always enabled; text = "EXIT CONSTRUCTION MODE".
-///
-/// Building type filtering (Building::type field):
-///   mark  → MARKETS tab
-///   bdep/ware → DEPOTS tab
-///   bpro  → PRODUCTION BUILDINGS tab
-///   bdem  → DEMAND BUILDINGS tab
-///
-/// on_select("") = cancel/close; on_select("<id>") = building or pathway chosen.
+
+// --- Data types for caller-supplied tab content ------------------------------
+
+struct BuildMenuEntry {
+    std::string id;
+    std::string label;
+    std::string desc;
+    int  cost       = 0;
+    bool is_pathway = false;
+};
+
+struct BuildMenuData {
+    static constexpr int kNumTabs = 5;
+    std::vector<BuildMenuEntry> tabs[kNumTabs];
+};
+
+// --- Widget ------------------------------------------------------------------
+
 class BuildMenu : public Widget {
 public:
-    using OnSelectFn = std::function<void(const std::string& id)>;
-
-    BuildMenu(const std::map<std::string, data::Building>& buildings,
-              OnSelectFn on_select,
-              ConsSkin skin = {});
+    explicit BuildMenu(ConsSkin skin = {});
 
     void layout(Rect window_bounds) override;
     void render(SDL_Renderer* renderer, FontCache& fonts) const override;
     bool handle_event(const SDL_Event& e) override;
+
+    // Populate all 5 tabs from pre-built data (call after construction or
+    // whenever the available-buildings set changes).
+    void set_data(const BuildMenuData& data);
+
+    // Show/grey the CONFIRM button. Pass true when a building is pinned.
+    void set_confirm_visible(bool visible);
+
+    // When true the EXIT button label/behaviour reflects "you are in
+    // construction mode". (Currently cosmetic — always labelled EXIT.)
+    void set_construction_mode_active(bool active);
+
+    // Callbacks — all optional; set by caller after constructing.
+    std::function<void(const std::string& id)> on_item_selected;  // list row clicked
+    std::function<void()>                      on_confirm_clicked;
+    std::function<void()>                      on_exit_clicked;
 
     static constexpr int kFallbackWidth  = 306;
     static constexpr int kFallbackHeight = 696;
@@ -52,8 +72,8 @@ private:
     // ---------------------------------------------------------------------------
     static constexpr int kNumTabs = 5;
     struct TabDef {
-        const char* type_filter; // Building::type value(s) to match — or "path"
-        const char* label;       // Display text (all-caps matches original)
+        const char* type_filter;
+        const char* label;
     };
     static constexpr TabDef kTabs[kNumTabs] = {
         {"path", "PATHWAYS"},
@@ -61,30 +81,6 @@ private:
         {"depo", "DEPOTS"},
         {"prod", "PRODUCTION BUILDINGS"},
         {"dema", "DEMAND BUILDINGS"},
-    };
-
-    // Pathway types shown in the PATHWAYS tab (integers 0-3, confirmed by RE).
-    struct PathwayEntry {
-        const char* id;
-        const char* label;
-        int type_id;
-    };
-    static constexpr PathwayEntry kPathways[4] = {
-        {"trai", "Trail",    0},
-        {"road", "Road",     1},
-        {"rail", "Railway",  2},
-        {"cana", "Canal",    3},
-    };
-
-    // ---------------------------------------------------------------------------
-    // List entry
-    // ---------------------------------------------------------------------------
-    struct ListEntry {
-        std::string id;
-        std::string label;
-        std::string desc;
-        int  cost       = 0;
-        bool is_pathway = false;
     };
 
     // ---------------------------------------------------------------------------
@@ -116,35 +112,29 @@ private:
     static constexpr int kConfY = 618;
     static constexpr int kCancY = 650;
 
-    static constexpr int kRowHeight  = 20;   // building-list row height (= sele h)
+    static constexpr int kRowHeight  = 20;
     static constexpr int kScrollStep = kRowHeight * 2;
 
-    // Scrollbar (cons.vscr): 16px-wide column at the list's right edge, with an
-    // up-arrow button (top) and down-arrow button (bottom) from the sprite
-    // sheet, and a procedural draggable thumb in the track between them.
-    // cons.vscr (16x120) is sliced by the BListScroller draw (orig 0x572fd0),
-    // NOT into uniform frames. arrow = bar width = 16; every blit uses srcX=0,
-    // w=16, and thin horizontal source slices stretched/tiled vertically:
-    //   slider thumb (3-part): top cap src y=32, tiled middle y=36, bottom y=40
-    //   track (background)    : tiled middle src y=44
-    // (offsets = arrow*2, +4, +8, +0xc). See documentation/cons-scrollbar-re.md.
-    static constexpr int kScrollW   = 16;   // bar width (= arrow)
-    static constexpr int kArrowH    = 16;   // arrow button height
-    static constexpr int kThumbMinH = 8;    // original clamps thumb to >= 8px
-    static constexpr int kSliceH    = 4;    // source slice height
-    static constexpr int kSlidTop   = 32;   // slider top-cap src y
-    static constexpr int kSlidMid   = 36;   // slider tiled-middle src y
-    static constexpr int kSlidBot   = 40;   // slider bottom-cap src y
-    static constexpr int kTrackTile = 44;   // track tiled-middle src y
-    static constexpr int kVscrUp    = 0;    // up-arrow button src y (top 16px)
+    // Scrollbar (cons.vscr) slice constants — see documentation/cons-scrollbar-re.md.
+    static constexpr int kScrollW   = 16;
+    static constexpr int kArrowH    = 16;
+    static constexpr int kThumbMinH = 8;
+    static constexpr int kSliceH    = 4;
+    static constexpr int kSlidTop   = 32;
+    static constexpr int kSlidMid   = 36;
+    static constexpr int kSlidBot   = 40;
+    static constexpr int kTrackTile = 44;
+    static constexpr int kVscrUp    = 0;
 
     // ---------------------------------------------------------------------------
     // State
     // ---------------------------------------------------------------------------
-    OnSelectFn on_select_;
-    ConsSkin   skin_;
+    ConsSkin skin_;
 
-    std::vector<ListEntry> tab_entries_[kNumTabs];
+    std::vector<BuildMenuEntry> tab_entries_[kNumTabs];
+
+    bool confirm_visible_          = false;
+    bool construction_mode_active_ = false;
 
     int         active_tab_    = 1;  // default to MARKETS (index 1)
     std::string selected_id_;
@@ -154,7 +144,7 @@ private:
     int         pressed_btn_   = 0;  // 0=none, 1=confirm, 2=cancel (held down)
     int         pressed_arrow_ = 0;  // 0=none, 1=up, 2=down (scrollbar arrow held)
     bool        dragging_thumb_ = false;
-    int         drag_dy_       = 0;  // cursor offset within the thumb when grabbed
+    int         drag_dy_       = 0;
 
     // ---------------------------------------------------------------------------
     // Laid-out geometry (set by layout())
@@ -168,24 +158,20 @@ private:
     Rect canc_rect_;
     int  dialog_ox_ = 0, dialog_oy_ = 0;
 
-    // Fallback flat background (when no skin).
     std::unique_ptr<Panel> bg_panel_;
 
     // ---------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------
-    const std::vector<ListEntry>& active_entries() const noexcept {
+    const std::vector<BuildMenuEntry>& active_entries() const noexcept {
         return tab_entries_[active_tab_];
     }
-    const ListEntry* selected_entry() const noexcept;
+    const BuildMenuEntry* selected_entry() const noexcept;
     int  max_scroll() const noexcept;
     void clamp_scroll();
     int  row_screen_y(int i) const noexcept;
     void switch_tab(int tab);
 
-    // Computes the scrollbar sub-rects (the 16px column at the list's right
-    // edge): the up/down arrow buttons and the track + thumb between them.
-    // Returns true if the list content overflows (i.e. the thumb is movable).
     bool scrollbar_geom(Rect& up, Rect& down, Rect& track, Rect& thumb) const;
 
     void render_scrollbar(SDL_Renderer* r) const;
@@ -194,10 +180,6 @@ private:
     void render_info(SDL_Renderer* r, Font* font) const;
     void render_bottom_buttons(SDL_Renderer* r, Font* font) const;
 
-    // Blits one horizontal frame of a multi-frame sprite. The conf/canc
-    // sprites are 64x29 = two 32x29 frames (left = normal, right = pressed);
-    // the original only ever draws one (the widget rect is 32 wide, half the
-    // sprite). frame in [0,nframes).
     static void blit_skin(SDL_Renderer* r, const SkinSprite& s, int ox, int oy,
                           int frame = 0, int nframes = 1);
 };

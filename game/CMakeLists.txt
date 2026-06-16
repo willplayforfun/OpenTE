@@ -27,9 +27,11 @@ add_executable(opente
     src/core/paths.cpp
     src/core/scene_manager.cpp
     src/gameplay/gameplay_scene.cpp
+    src/gameplay/construction_mode.cpp
     src/data/registry.cpp
     src/render/font.cpp
     src/render/font_cache.cpp
+    src/render/area_overlay.cpp
     src/render/terrain_renderer.cpp
     src/render/terrain_tileset.cpp
     src/render/texture.cpp
@@ -37,6 +39,7 @@ add_executable(opente
     src/world/world.cpp
     src/ui/panel.cpp
     src/ui/manager.cpp
+    src/ui/hud.cpp
     src/ui/build_menu.cpp
     src/ui/main_menu_scene.cpp
 )

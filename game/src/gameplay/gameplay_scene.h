@@ -8,10 +8,13 @@
 
 #include "core/scene.h"
 #include "data/registry.h"
+#include "gameplay/construction_mode.h"
+#include "render/area_overlay.h"
 #include "render/camera.h"
 #include "render/terrain_renderer.h"
 #include "render/terrain_tileset.h"
 #include "render/texture.h"
+#include "ui/build_menu.h"
 #include "ui/manager.h"
 #include "ui/skin.h"
 #include "world/world.h"
@@ -51,6 +54,14 @@ private:
     void render_font_test();
     void render_lighting_window();
 
+    // Construction mode helpers.
+    void rebuild_build_menu_data();
+    void on_build_menu_item_selected(const std::string& id);
+    void render_construction_overlays();
+    void render_hud_overlay();
+    // Converts screen pixel → isometric tile (no height correction; good enough for Stage 2).
+    bool pick_tile_from_mouse(int screen_x, int screen_y, int& out_tx, int& out_ty) const;
+
     SDL_Window*   window_   = nullptr;
     SDL_Renderer* renderer_ = nullptr;
     const data::DataRegistry* registry_ = nullptr;
@@ -81,6 +92,13 @@ private:
     bool show_font_test_       = false;
 
     ui::Widget* build_menu_ptr_ = nullptr;
+
+    // Construction mode.
+    ConstructionMode        construction_mode_;
+    render::AreaOverlayRenderer overlay_renderer_;
+    ui::BuildMenuData       build_menu_data_;
+    bool                    build_menu_data_built_ = false;
+    bool                    sim_paused_            = false;
 
     struct RenderDefaults {
         float slope_gradient_scale;
