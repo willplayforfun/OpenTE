@@ -24,6 +24,7 @@ constexpr const char* kConsSpriteIds[] = {
     "ui.a_ui.cons.sele",
     "ui.a_ui.cons.conf",
     "ui.a_ui.cons.canc",
+    "ui.a_ui.stdc.vscr",   // shared vertical scrollbar (up/down arrows)
 };
 
 }  // namespace
@@ -164,6 +165,7 @@ void GameplayScene::load_sprites() {
     cons_skin_.selection   = make_skin_sprite("ui.a_ui.cons.sele");
     cons_skin_.confirm_btn = make_skin_sprite("ui.a_ui.cons.conf");
     cons_skin_.cancel_btn  = make_skin_sprite("ui.a_ui.cons.canc");
+    cons_skin_.scrollbar   = make_skin_sprite("ui.a_ui.stdc.vscr");
 
     if (!cons_skin_.valid()) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,

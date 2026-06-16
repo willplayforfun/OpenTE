@@ -119,6 +119,25 @@ private:
     static constexpr int kRowHeight  = 20;   // building-list row height (= sele h)
     static constexpr int kScrollStep = kRowHeight * 2;
 
+    // Scrollbar (cons.vscr): 16px-wide column at the list's right edge, with an
+    // up-arrow button (top) and down-arrow button (bottom) from the sprite
+    // sheet, and a procedural draggable thumb in the track between them.
+    // cons.vscr (16x120) is sliced by the BListScroller draw (orig 0x572fd0),
+    // NOT into uniform frames. arrow = bar width = 16; every blit uses srcX=0,
+    // w=16, and thin horizontal source slices stretched/tiled vertically:
+    //   slider thumb (3-part): top cap src y=32, tiled middle y=36, bottom y=40
+    //   track (background)    : tiled middle src y=44
+    // (offsets = arrow*2, +4, +8, +0xc). See documentation/cons-scrollbar-re.md.
+    static constexpr int kScrollW   = 16;   // bar width (= arrow)
+    static constexpr int kArrowH    = 16;   // arrow button height
+    static constexpr int kThumbMinH = 8;    // original clamps thumb to >= 8px
+    static constexpr int kSliceH    = 4;    // source slice height
+    static constexpr int kSlidTop   = 32;   // slider top-cap src y
+    static constexpr int kSlidMid   = 36;   // slider tiled-middle src y
+    static constexpr int kSlidBot   = 40;   // slider bottom-cap src y
+    static constexpr int kTrackTile = 44;   // track tiled-middle src y
+    static constexpr int kVscrUp    = 0;    // up-arrow button src y (top 16px)
+
     // ---------------------------------------------------------------------------
     // State
     // ---------------------------------------------------------------------------
@@ -133,6 +152,9 @@ private:
     int         hover_row_     = -1;
     int         scroll_offset_ = 0;
     int         pressed_btn_   = 0;  // 0=none, 1=confirm, 2=cancel (held down)
+    int         pressed_arrow_ = 0;  // 0=none, 1=up, 2=down (scrollbar arrow held)
+    bool        dragging_thumb_ = false;
+    int         drag_dy_       = 0;  // cursor offset within the thumb when grabbed
 
     // ---------------------------------------------------------------------------
     // Laid-out geometry (set by layout())
@@ -160,6 +182,11 @@ private:
     void clamp_scroll();
     int  row_screen_y(int i) const noexcept;
     void switch_tab(int tab);
+
+    // Computes the scrollbar sub-rects (the 16px column at the list's right
+    // edge): the up/down arrow buttons and the track + thumb between them.
+    // Returns true if the list content overflows (i.e. the thumb is movable).
+    bool scrollbar_geom(Rect& up, Rect& down, Rect& track, Rect& thumb) const;
 
     void render_scrollbar(SDL_Renderer* r) const;
     void render_list(SDL_Renderer* r, Font* font) const;

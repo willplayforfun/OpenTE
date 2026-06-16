@@ -30,6 +30,21 @@ inline void sdl_outline(SDL_Renderer* r, const Rect& rect,
 // tune kTextShadow / the offset if a screenshot shows otherwise.)
 constexpr SDL_Color kTextShadow{0, 0, 0, 255};
 
+// Exact text colours from the original (layout fn 0x424940 -> 0x56d4b0).
+// The colour literal is encoded 0x00BBGGRR (red in the LOW byte), confirmed
+// from the RGB565 converter 0x56e470 (byte[0] -> red channel).
+//   title 'titl'               = 0x0042c1fc -> (252,193,66)  golden yellow
+//   categories / button labels = 0x0075bfde -> (222,191,117) tan/gold
+//   building list / confirm    = 0x00ffffff -> white
+//   panel/desc box/cancel icon = 0x80000008  (high bit = "no solid fill,
+//     sprite-backed" sentinel, NOT a palette colour — these draw via sprites/
+//     the stone art; it drives no readable text.)
+// The description body/name text is coloured dynamically on selection (not a
+// static layout constant); it's white in-game.
+constexpr SDL_Color kColTitle{252, 193, 66, 255};   // #FCC142
+constexpr SDL_Color kColCat{222, 191, 117, 255};    // #DEBF75
+constexpr SDL_Color kColWhite{255, 255, 255, 255};
+
 void draw_centred(SDL_Renderer* r, Font* f, const Rect& rect,
                   const char* text, SDL_Color c) {
     if (!f || !text || !text[0]) return;
@@ -183,22 +198,75 @@ void BuildMenu::switch_tab(int tab) {
 // Rendering helpers
 // ---------------------------------------------------------------------------
 
-void BuildMenu::render_scrollbar(SDL_Renderer* r) const {
+// Computes the scrollbar sub-rects. The 16px column sits at the list's right
+// edge (the original list reserves this gutter to the right of its 240px row
+// content). Returns true if the content overflows (thumb is movable).
+bool BuildMenu::scrollbar_geom(Rect& up, Rect& down, Rect& track,
+                               Rect& thumb) const {
+    const int bx = list_rect_.x + list_rect_.w - kScrollW;
+    up   = {bx, list_rect_.y, kScrollW, kArrowH};
+    down = {bx, list_rect_.y + list_rect_.h - kArrowH, kScrollW, kArrowH};
+    const int track_y = up.y + up.h;
+    const int track_h = down.y - track_y;
+    track = {bx, track_y, kScrollW, track_h};
+
     const int content = static_cast<int>(active_entries().size()) * kRowHeight;
-    if (content <= list_rect_.h) return;
+    const int max_s   = max_scroll();
+    if (content <= list_rect_.h || max_s <= 0 || track_h <= 0) {
+        thumb = track;             // not scrollable: thumb fills the track
+        return false;
+    }
+    int thumb_h = std::max(kThumbMinH,
+        static_cast<int>(static_cast<float>(track_h) * list_rect_.h / content));
+    thumb_h = std::min(thumb_h, track_h);
+    const int thumb_y = track_y + static_cast<int>(
+        (track_h - thumb_h) * static_cast<float>(scroll_offset_) / max_s);
+    thumb = {bx, thumb_y, kScrollW, thumb_h};
+    return true;
+}
 
-    const int tx = list_rect_.x + list_rect_.w + 2;
-    const int th = list_rect_.h;
-    sdl_fill(r, {tx, list_rect_.y, 4, th}, 30, 30, 50, 160);
+void BuildMenu::render_scrollbar(SDL_Renderer* r) const {
+    Rect up, down, track, thumb;
+    const bool scrollable = scrollbar_geom(up, down, track, thumb);
 
-    const float ratio  = static_cast<float>(th) / static_cast<float>(content);
-    const int thumb_h  = std::max(16, static_cast<int>(th * ratio));
-    const int max_s    = max_scroll();
-    const int thumb_y  = max_s > 0
-        ? list_rect_.y + static_cast<int>((th - thumb_h) *
-                         static_cast<float>(scroll_offset_) / max_s)
-        : list_rect_.y;
-    sdl_fill(r, {tx, thumb_y, 4, thumb_h}, 110, 110, 150, 200);
+    if (!(skin_.valid() && skin_.scrollbar.valid())) {
+        // Fallback (no skin): simple flat bar.
+        sdl_fill(r, track, 30, 30, 50, 160);
+        if (scrollable) sdl_fill(r, thumb, 110, 110, 150, 200);
+        return;
+    }
+
+    SDL_Texture* tex = skin_.scrollbar.tex;
+    const int sh = skin_.scrollbar.h;   // 120
+
+    // Blit a 16xh source slice of vscr (srcY, srcH) into dst.
+    auto blit = [&](int srcY, int srcH, const Rect& dst) {
+        const SDL_Rect src{0, srcY, kScrollW, srcH};
+        const SDL_Rect d = dst.to_sdl();
+        SDL_RenderCopy(r, tex, &src, &d);
+    };
+    // Fill [y0,y1) at x by tiling a kSliceH-tall source slice (3-part stretch).
+    auto fill_tiled = [&](int srcY, int x, int y0, int y1) {
+        for (int y = y0; y < y1; y += kSliceH)
+            blit(srcY, kSliceH, {x, y, kScrollW, std::min(kSliceH, y1 - y)});
+    };
+
+    // Track (background bar): tiled groove slice down the full track.
+    fill_tiled(kTrackTile, track.x, track.y, track.y + track.h);
+
+    // Slider (foreground thumb): 3-part vertical — top cap, tiled middle,
+    // bottom cap (each a 4px source slice).
+    if (scrollable && thumb.h >= 2 * kSliceH) {
+        blit(kSlidTop, kSliceH, {thumb.x, thumb.y, kScrollW, kSliceH});
+        fill_tiled(kSlidMid, thumb.x, thumb.y + kSliceH, thumb.y + thumb.h - kSliceH);
+        blit(kSlidBot, kSliceH, {thumb.x, thumb.y + thumb.h - kSliceH, kScrollW, kSliceH});
+    } else if (scrollable) {
+        blit(kSlidMid, kSliceH, thumb);
+    }
+
+    // Arrow buttons: up = top 16px of vscr, down = bottom 16px.
+    blit(kVscrUp, kArrowH, up);
+    blit(sh - kArrowH, kArrowH, down);
 }
 
 void BuildMenu::render_list(SDL_Renderer* r, Font* font) const {
@@ -231,20 +299,13 @@ void BuildMenu::render_list(SDL_Renderer* r, Font* font) const {
             sdl_fill(r, {list_rect_.x, sy, row_w, kRowHeight}, 50, 55, 30, 90);
         }
 
-        const SDL_Color tc = (i == selected_row_)
-            ? SDL_Color{40, 38, 20, 255}                 // dark on green bar
-            : SDL_Color{205, 192, 140, 230};
+        const SDL_Color tc = kColWhite;   // list rows are white in the original
 
-        draw_left(r, font, list_rect_.x + 6, sy, kRowHeight,
-                  entries[i].label.c_str(), tc);
-
+        std::string cs = entries[i].label.c_str();
         if (entries[i].cost > 0) {
-            const std::string cs = std::to_string(entries[i].cost) + " coins";
-            draw_right(r, font, list_rect_.x, row_w,
-                       sy, kRowHeight, cs.c_str(),
-                       (i == selected_row_) ? SDL_Color{50, 45, 25, 230}
-                                            : SDL_Color{180, 168, 110, 200});
+            cs = cs + " " + std::to_string(entries[i].cost) + " coins";
         }
+        draw_left(r, font, list_rect_.x + 6, sy, kRowHeight, cs.c_str(), tc);
     }
 
     SDL_RenderSetClipRect(r, nullptr);
@@ -262,10 +323,6 @@ void BuildMenu::render_preview(SDL_Renderer* r) const {
 }
 
 void BuildMenu::render_info(SDL_Renderer* r, Font* font) const {
-    if (!skin_.valid()) {
-        sdl_fill(r, info_rect_, 18, 18, 22, 210);
-        sdl_outline(r, info_rect_, 60, 58, 45, 140);
-    }
 
     const ListEntry* sel = selected_entry();
     if (!sel || !font) return;
@@ -278,14 +335,7 @@ void BuildMenu::render_info(SDL_Renderer* r, Font* font) const {
     // ABOVE the body box (original: label +0xa80 @ y=461; body +0x900 @ y=486,
     // with an engraved groove between — the "divider line").
     const Rect title_rc{mx + kDLblX, my + kDLblY, kDLblW, kDLblH};
-    draw_centred(r, font, title_rc, sel->label.c_str(),
-                 SDL_Color{240, 225, 160, 255});
-
-    // Divider between the title and the body text.
-    const int div_y = my + kDescY - 2;
-    SDL_SetRenderDrawColor(r, 90, 80, 55, 200);
-    SDL_RenderDrawLine(r, mx + kDescX + 6, div_y,
-                       mx + kDescX + kDescW - 6, div_y);
+    draw_centred(r, font, title_rc, sel->label.c_str(), kColWhite);
 
     // Body: cost + wrapped description, all centred. The 'text' child widget
     // (+0x9c0) is parented to the desc box at relative (0,0) with width 225,
@@ -304,8 +354,7 @@ void BuildMenu::render_info(SDL_Renderer* r, Font* font) const {
     };
 
     if (sel->cost > 0) {
-        draw_c(std::to_string(sel->cost) + " coins",
-               SDL_Color{205, 195, 145, 230});
+        draw_c("Cost: " + std::to_string(sel->cost), kColWhite);
         y += 2;
     }
 
@@ -319,7 +368,7 @@ void BuildMenu::render_info(SDL_Renderer* r, Font* font) const {
                 if (!word.empty() &&
                     font->measure_text(trial.c_str()) > max_w &&
                     !line.empty()) {
-                    draw_c(line, SDL_Color{175, 162, 115, 200});
+                    draw_c(line, kColWhite);
                     line = word;
                 } else {
                     line = trial;
@@ -330,7 +379,7 @@ void BuildMenu::render_info(SDL_Renderer* r, Font* font) const {
                 word += ch;
             }
         }
-        draw_c(line, SDL_Color{175, 162, 115, 200});
+        draw_c(line, kColWhite);
     }
 }
 
@@ -358,8 +407,7 @@ void BuildMenu::render_bottom_buttons(SDL_Renderer* r, Font* font) const {
             label += " (" + std::to_string(sel->cost) + " coins)";
         draw_left(r, font, conf_rect_.x + 46, conf_rect_.y, conf_rect_.h,
                   label.c_str(),
-                  can_confirm ? SDL_Color{220, 215, 160, 255}
-                              : SDL_Color{120, 115, 90, 180});
+                  can_confirm ? kColCat : SDL_Color{120, 115, 90, 180});
     }
 
     // Cancel / exit. Same two-frame sprite layout.
@@ -370,7 +418,7 @@ void BuildMenu::render_bottom_buttons(SDL_Renderer* r, Font* font) const {
         sdl_fill(r, canc_rect_, 55, 35, 35, 200);
     }
     draw_left(r, font, canc_rect_.x + 46, canc_rect_.y, canc_rect_.h,
-              "EXIT CONSTRUCTION MODE", SDL_Color{200, 180, 140, 220});
+              "EXIT CONSTRUCTION MODE", kColCat);
 }
 
 // ---------------------------------------------------------------------------
@@ -404,7 +452,7 @@ void BuildMenu::render(SDL_Renderer* r, FontCache& fonts) const {
                  30, 34, 52, 255);
         draw_centred(r, f_title,
                      {menu_rect_.x, menu_rect_.y, menu_rect_.w, kTitleH},
-                     "CONSTRUCTION", SDL_Color{220, 205, 150, 255});
+                     "CONSTRUCTION", kColTitle);
         SDL_SetRenderDrawColor(r, 80, 80, 120, 200);
         SDL_RenderDrawLine(r,
                            menu_rect_.x, menu_rect_.y + kTitleH,
@@ -416,8 +464,7 @@ void BuildMenu::render(SDL_Renderer* r, FontCache& fonts) const {
     if (skin_.valid()) {
         const Rect title{menu_rect_.x + kTitleX, menu_rect_.y + kTitleY,
                          kTitleW, kTitleH};
-        draw_centred(r, f_title, title, "CONSTRUCTION",
-                     SDL_Color{225, 210, 155, 255});
+        draw_centred(r, f_title, title, "CONSTRUCTION", kColTitle);
     }
 
     // Five category rows — thin text rows; the active row gets the 'sele'
@@ -437,9 +484,9 @@ void BuildMenu::render(SDL_Renderer* r, FontCache& fonts) const {
             }
         }
 
-        draw_centred(r, f_cat, tr, kTabs[i].label,
-                     act ? SDL_Color{255, 245, 160, 255}
-                         : SDL_Color{200, 188, 140, 220});
+        // Original draws all category rows in the same tan; the active row is
+        // indicated by the green 'sele' bar, not a brighter text colour.
+        draw_centred(r, f_cat, tr, kTabs[i].label, kColCat);
     }
 
     render_list(r, f_list);
@@ -464,6 +511,20 @@ bool BuildMenu::handle_event(const SDL_Event& e) {
 
     if (e.type == SDL_MOUSEMOTION) {
         const int mx = e.motion.x, my = e.motion.y;
+
+        if (dragging_thumb_) {
+            Rect up, down, track, thumb;
+            if (scrollbar_geom(up, down, track, thumb)) {
+                const int span = track.h - thumb.h;
+                if (span > 0) {
+                    const float frac = static_cast<float>(my - drag_dy_ - track.y) / span;
+                    scroll_offset_ = static_cast<int>(frac * max_scroll() + 0.5f);
+                    clamp_scroll();
+                }
+            }
+            return true;
+        }
+
         hover_row_ = -1;
         if (list_rect_.contains(mx, my)) {
             const int idx = (my - list_rect_.y + scroll_offset_) / kRowHeight;
@@ -480,6 +541,36 @@ bool BuildMenu::handle_event(const SDL_Event& e) {
         for (int i = 0; i < kNumTabs; ++i) {
             if (tab_rects_[i].contains(mx, my)) {
                 switch_tab(i);
+                return true;
+            }
+        }
+
+        // Scrollbar (right edge of the list) — checked before list rows since
+        // the 16px bar column overlaps the list rect.
+        {
+            Rect up, down, track, thumb;
+            const bool scrollable = scrollbar_geom(up, down, track, thumb);
+            if (up.contains(mx, my)) {
+                pressed_arrow_ = 1;
+                scroll_offset_ -= kRowHeight;
+                clamp_scroll();
+                return true;
+            }
+            if (down.contains(mx, my)) {
+                pressed_arrow_ = 2;
+                scroll_offset_ += kRowHeight;
+                clamp_scroll();
+                return true;
+            }
+            if (scrollable && thumb.contains(mx, my)) {
+                dragging_thumb_ = true;
+                drag_dy_ = my - thumb.y;
+                return true;
+            }
+            if (scrollable && track.contains(mx, my)) {
+                // Page up/down depending on which side of the thumb was hit.
+                scroll_offset_ += (my < thumb.y) ? -list_rect_.h : list_rect_.h;
+                clamp_scroll();
                 return true;
             }
         }
@@ -509,6 +600,11 @@ bool BuildMenu::handle_event(const SDL_Event& e) {
 
     if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) {
         const int mx = e.button.x, my = e.button.y;
+        if (dragging_thumb_ || pressed_arrow_) {
+            dragging_thumb_ = false;
+            pressed_arrow_  = 0;
+            return true;
+        }
         const int was = pressed_btn_;
         pressed_btn_ = 0;
         // Clear state before invoking the callback: it may close (delete) this

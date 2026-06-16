@@ -41,6 +41,10 @@ struct ConsSkin {
     SkinSprite selection;    // ui.a_ui.cons.sele
     SkinSprite confirm_btn;  // ui.a_ui.cons.conf
     SkinSprite cancel_btn;   // ui.a_ui.cons.canc
+    // ui.a_ui.stdc.vscr — vertical scrollbar sheet, 16x120 = 4 frames of 16x30:
+    //   [0] up arrow normal, [1] up pressed, [2] down normal, [3] down pressed.
+    // (The thumb is not in the sheet; the original draws it procedurally.)
+    SkinSprite scrollbar;
 
     bool valid() const { return background.valid(); }
 };
