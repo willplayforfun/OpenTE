@@ -40,6 +40,17 @@ public:
     /// Draws the widget. Pull the needed face/size from `fonts`.
     virtual void render(SDL_Renderer* renderer, FontCache& fonts) const = 0;
 
+    /// Optional top-most pass, drawn after the entire dialog stack. Used for
+    /// transient overlays (e.g. the HUD's open dropdown) that must sit above
+    /// any panels regardless of z-order. Default: nothing.
+    virtual void render_overlay(SDL_Renderer* /*renderer*/,
+                                FontCache& /*fonts*/) const {}
+
+    /// While true, this widget gets first crack at events, ahead of the dialog
+    /// stack — pairs with render_overlay() so an open overlay also captures
+    /// input. Default: false.
+    virtual bool wants_event_priority() const { return false; }
+
     /// Handles an SDL event. Returns true if the event was consumed and should
     /// not be forwarded to widgets below this one in the z-order.
     virtual bool handle_event(const SDL_Event& e) = 0;

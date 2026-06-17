@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -77,6 +78,11 @@ public:
     // Set the panel's label strings (from the extracted `strings` table). If
     // never called, the BuildMenuStrings defaults (the original literals) apply.
     void set_strings(BuildMenuStrings strings);
+
+    // Supply preview sprites for the four path types (keyed by path id:
+    // "trai", "road", "rail", "cana"). Borrowed textures — the caller must
+    // keep the underlying render::Texture alive for the widget's lifetime.
+    void set_path_sprites(std::map<std::string, SkinSprite> sprites);
 
     // Show/grey the CONFIRM button. Pass true when a building is pinned.
     void set_confirm_visible(bool visible);
@@ -183,6 +189,7 @@ private:
     // ---------------------------------------------------------------------------
     ConsSkin skin_;
     BuildMenuStrings text_;
+    std::map<std::string, SkinSprite> path_sprites_;  // keyed by "trai"/"road"/"rail"/"cana"
 
     std::vector<BuildMenuEntry> tab_entries_[kNumTabs];
 

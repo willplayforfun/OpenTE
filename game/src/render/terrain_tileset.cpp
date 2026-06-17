@@ -16,6 +16,8 @@ namespace {
 
 constexpr const char* kTerrainTexturesTablePath = "tables/terrain_textures.json";
 constexpr const char* kShoreAtlasSpriteIds[2] = {"terrain.coa0", "terrain.coa1"};
+// JSON keys for network overlay atlases (trail1/trail2/canal/rail).
+constexpr const char* kNetworkJsonKeys[4] = {"trail1", "trail2", "canal", "rail"};
 constexpr const char* kEdgeSpriteId = "terrain.edge";
 constexpr const char* kHiddSpriteId = "terrain.hidd";
 
@@ -144,6 +146,18 @@ TerrainTileset TerrainTileset::load(SDL_Renderer* renderer,
         }
     }
 
+    for (std::size_t i = 0; i < ts.networks_.size(); ++i) {
+        const std::string net_id = cj.value(kNetworkJsonKeys[i], std::string{});
+        if (!net_id.empty()) {
+            if (const auto path = find_sprite_file(net_id)) {
+                ts.networks_[i] = Texture::load(renderer, *path);
+                if (ts.networks_[i].valid()) {
+                    SDL_SetTextureBlendMode(ts.networks_[i].handle(), SDL_BLENDMODE_BLEND);
+                }
+            }
+        }
+    }
+
     if (const auto path = find_sprite_file(kEdgeSpriteId)) {
         ts.edge_ = Texture::load(renderer, *path);
         if (ts.edge_.valid()) {
@@ -176,6 +190,11 @@ SDL_Texture* TerrainTileset::tran() const {
 SDL_Texture* TerrainTileset::shore(int layer) const {
     if (layer < 0 || layer >= static_cast<int>(shores_.size())) return nullptr;
     return shores_[layer].valid() ? shores_[layer].handle() : nullptr;
+}
+
+SDL_Texture* TerrainTileset::network(int layer) const {
+    if (layer < 0 || layer >= static_cast<int>(networks_.size())) return nullptr;
+    return networks_[layer].valid() ? networks_[layer].handle() : nullptr;
 }
 
 SDL_Texture* TerrainTileset::edge() const {

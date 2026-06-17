@@ -16,12 +16,17 @@ constexpr SDL_Color kText = {224, 210, 178, 255};
 }  // namespace
 
 HudBars::HudBars(SDL_Renderer* renderer, const data::DataRegistry& registry) {
-    static const std::array<const char*, 12> ids = {
+    static const std::array<const char*, 16> ids = {
         "ui.a_ui.tool.topb",  "ui.a_ui.tool.botb",
         "ui.a_ui.tool.play",  "ui.a_ui.tool.rout",  "ui.a_ui.tool.cons",
         "ui.a_ui.tool.tech",  "ui.a_ui.tool.terr",  "ui.a_ui.tool.regi",
         "ui.a_ui.tool.wmap",  "ui.a_ui.tool.game",
         "ui.a_ui.stdc.coin",  "ui.a_ui.stdc.down",
+        // Dropdown sprites (dropdown-menus-re.md §5):
+        "ui.a_ui.tool.regm",  // dropdown panel frame
+        "ui.a_ui.stdc.sele",  // list-item highlight row (194×17)
+        "ui.a_ui.tool.rebo",  // scroll trough / divider
+        "ui.a_ui.stdc.vscr",  // scrollbar thumb
     };
     const std::filesystem::path& dir = registry.game_data_dir();
     for (const data::SpriteEntry& s : registry.manifest().sprites) {
@@ -66,6 +71,60 @@ const HudBars::Sprite* HudBars::sprite(const std::string& id) const {
 Rect HudBars::button_rect(const ModeButton& b) const {
     const int x = b.right_group ? sx_right(b.x) : sx_left(b.x);
     return {x, bottom_y() + b.y, b.w, b.h};
+}
+
+// ── Dropdown geometry ────────────────────────────────────────────────────────
+// Panel = the tool/regm.a6g frame (182×200 art drawn into the RE'd 203×200
+// rect). Items are 17px rows inside the list inset (5,5,192,h). The original
+// repositions the panel under its arrow on open via the (un-decoded) helper
+// 0x517140; we approximate that intent by dropping it straight down from the
+// arrow, just below the top bar.
+namespace {
+constexpr int kPanelW = 203;     // RE'd panel width
+constexpr int kListX  = 5;       // list inset within the panel (RE: 5,5)
+constexpr int kListY  = 5;
+constexpr int kListW  = 192;
+constexpr int kItemH  = 17;      // stdc/sele.a6g row height
+}  // namespace
+
+const std::vector<HudBars::SpeedOption>& HudBars::speed_options() {
+    // dropdown-menus-re.md §4b — labels and item+8 codes, in menu order.
+    static const std::vector<SpeedOption> opts = {
+        {"PAUSE", 0x000}, {"1/2 X", 0x080}, {"1 X", 0x100},
+        {"2 X",   0x200}, {"4 X",   0x400},
+    };
+    return opts;
+}
+
+int HudBars::popup_item_count(Popup p) const {
+    if (p == Popup::Speed)  return static_cast<int>(speed_options().size());
+    if (p == Popup::Region) return static_cast<int>(regions_.size());
+    return 0;
+}
+
+std::string HudBars::popup_item_label(Popup p, int i) const {
+    if (p == Popup::Speed)  return speed_options()[i].label;
+    if (p == Popup::Region) return regions_[i];
+    return {};
+}
+
+Rect HudBars::popup_panel_rect(Popup p) const {
+    // Height tracks the option count — the panel is only as tall as its list
+    // (the regm frame is stretched to fit).
+    const int arrow_x = (p == Popup::Region) ? 429 : 146;
+    const int h = popup_item_count(p) * kItemH + 2 * kListY;
+    return {sx_left(arrow_x), top_y() + kTopBarH, kPanelW, h};
+}
+
+Rect HudBars::popup_list_rect(Popup p) const {
+    const Rect panel = popup_panel_rect(p);
+    return {panel.x + kListX, panel.y + kListY, kListW,
+            popup_item_count(p) * kItemH};
+}
+
+Rect HudBars::popup_item_rect(Popup p, int i) const {
+    const Rect list = popup_list_rect(p);
+    return {list.x, list.y + i * kItemH, list.w, kItemH};
 }
 
 void HudBars::layout(Rect bounds) {
@@ -157,13 +216,17 @@ void HudBars::render(SDL_Renderer* renderer, FontCache& fonts) const {
     draw_label(renderer, fonts, date_,
                {sx_left(8), top_y() + 2, 130, 18}, kText);
 
-    // Speed cluster: arrow + plain text "Game Speed: x1".
-    if (down) blit(renderer, *down, 0, 22, {sx_left(146), top_y() + 1, 22, 18});
+    // Speed cluster: arrow (frame 1 while its popup is open) + plain text. The
+    // field chrome is already part of the topb background — no sprite is drawn
+    // under the text.
+    if (down) blit(renderer, *down, open_popup_ == Popup::Speed ? 1 : 0, 22,
+                   speed_arrow_rect());
     draw_label(renderer, fonts, "Game Speed: " + speed_,
                {sx_left(172), top_y() + 2, 250, 18}, kText);
 
     // Region name cluster: arrow + plain region name.
-    if (down) blit(renderer, *down, 0, 22, {sx_left(429), top_y() + 1, 22, 18});
+    if (down) blit(renderer, *down, open_popup_ == Popup::Region ? 1 : 0, 22,
+                   region_arrow_rect());
     draw_label(renderer, fonts, region_name_,
                {sx_left(455), top_y() + 2, 300, 18}, kText);
 
@@ -178,6 +241,77 @@ void HudBars::render(SDL_Renderer* renderer, FontCache& fonts) const {
     }
 }
 
+void HudBars::render_overlay(SDL_Renderer* renderer, FontCache& fonts) const {
+    // The open dropdown is drawn here (after the whole dialog stack) so it sits
+    // above the build menu and any other panel.
+    if (open_popup_ != Popup::None)
+        render_popup(renderer, fonts, open_popup_);
+}
+
+void HudBars::render_popup(SDL_Renderer* r, FontCache& fonts, Popup p) const {
+    const Rect panel = popup_panel_rect(p);
+
+    // Panel frame: tool/regm.a6g. The base game draws this sprite with the
+    // draw-script "@" (interpreter fcn 0x56c573 → blit 0x57f720), which scales
+    // the sprite to the view rect. The original keeps the panel rect at the
+    // sprite's *native height*, so "@" only ever stretches it horizontally
+    // (182→203) and never vertically — that's why the baked top/bottom bevels
+    // stay crisp (regm carries no 9-slice/border data; the engine's procedural
+    // bevel opcodes R/E/S aren't used here). We size the panel to the option
+    // list, so to honour the "never scale vertically" property we blit at
+    // native vertical scale and crop the texture's middle: the top half is
+    // sourced from the sprite top (keeps the top bevel), the bottom half from
+    // the sprite bottom (keeps the bottom bevel). Horizontal scaling matches
+    // the original.
+    if (const Sprite* regm = sprite("ui.a_ui.tool.regm")) {
+        SDL_Texture* tex = regm->tex.handle();
+        if (panel.h >= regm->h) {
+            SDL_Rect d = panel.to_sdl();
+            SDL_RenderCopy(r, tex, nullptr, &d);
+        } else {
+            const int topH = panel.h / 2;
+            const int botH = panel.h - topH;
+            SDL_Rect s_top{0, 0, regm->w, topH};
+            SDL_Rect d_top{panel.x, panel.y, panel.w, topH};
+            SDL_RenderCopy(r, tex, &s_top, &d_top);
+            SDL_Rect s_bot{0, regm->h - botH, regm->w, botH};
+            SDL_Rect d_bot{panel.x, panel.y + topH, panel.w, botH};
+            SDL_RenderCopy(r, tex, &s_bot, &d_bot);
+        }
+    } else {
+        SDL_SetRenderDrawColor(r, 32, 30, 26, 240);
+        SDL_Rect d = panel.to_sdl();
+        SDL_RenderFillRect(r, &d);
+    }
+
+    const Sprite* sele = sprite("ui.a_ui.stdc.sele");   // 194×17 hover highlight
+    const Rect list = popup_list_rect(p);
+    const int count = popup_item_count(p);
+
+    // Clip rows to the list area so an overflowing list doesn't paint past the
+    // panel (a functional scrollbar — rebo/vscr — is not wired up yet).
+    SDL_Rect clip = list.to_sdl();
+    SDL_RenderSetClipRect(r, &clip);
+
+    for (int i = 0; i < count; ++i) {
+        const Rect row = popup_item_rect(p, i);
+        const bool highlight =
+            (i == hovered_item_) ||
+            (p == Popup::Region && i == current_region_);
+        if (highlight && sele)
+            blit(r, *sele, 0, sele->w, row);
+        // List-item text: font/sans/9 (dropdown-menus-re.md §3c).
+        if (Font* f = fonts.get("sans", 9)) {
+            const std::string label = popup_item_label(p, i);
+            const int by = row.y + (row.h - (f->ascender() + f->descender())) / 2
+                           + f->ascender();
+            f->draw_text_shadowed(r, label.c_str(), row.x + 4, by, kText);
+        }
+    }
+
+    SDL_RenderSetClipRect(r, nullptr);
+}
+
 bool HudBars::handle_event(const SDL_Event& e) {
     if (e.type == SDL_MOUSEMOTION) {
         hovered_btn_ = -1;
@@ -187,18 +321,68 @@ bool HudBars::handle_event(const SDL_Event& e) {
                 break;
             }
         }
+        // Track the hovered dropdown row for the highlight.
+        hovered_item_ = -1;
+        if (open_popup_ != Popup::None) {
+            for (int i = 0; i < popup_item_count(open_popup_); ++i) {
+                if (popup_item_rect(open_popup_, i).contains(e.motion.x, e.motion.y)) {
+                    hovered_item_ = i;
+                    break;
+                }
+            }
+        }
         return false;  // don't consume — camera hover still needs motion
     }
 
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+        const int mx = e.button.x, my = e.button.y;
+
+        // Dropdown open-arrows toggle their popup (clicking the open one, or the
+        // other arrow, behaves like the original's 'down' handler).
+        if (speed_arrow_rect().contains(mx, my)) {
+            open_popup_ = (open_popup_ == Popup::Speed) ? Popup::None : Popup::Speed;
+            hovered_item_ = -1;
+            return true;
+        }
+        if (region_arrow_rect().contains(mx, my)) {
+            open_popup_ = (open_popup_ == Popup::Region) ? Popup::None : Popup::Region;
+            hovered_item_ = -1;
+            return true;
+        }
+
+        // Interactions with an open popup.
+        if (open_popup_ != Popup::None) {
+            const Popup p = open_popup_;
+            for (int i = 0; i < popup_item_count(p); ++i) {
+                if (popup_item_rect(p, i).contains(mx, my)) {
+                    open_popup_   = Popup::None;
+                    hovered_item_ = -1;
+                    if (p == Popup::Speed) {
+                        if (on_speed_selected)
+                            on_speed_selected(speed_options()[i].code,
+                                              speed_options()[i].label);
+                    } else if (on_region_selected) {
+                        on_region_selected(i);
+                    }
+                    return true;
+                }
+            }
+            // Click anywhere else dismisses the popup and is absorbed — while a
+            // dropdown is open it behaves modally, so the click never leaks to
+            // the bars or anything beneath.
+            open_popup_   = Popup::None;
+            hovered_item_ = -1;
+            return true;
+        }
+
         for (int i = 0; i < static_cast<int>(buttons_.size()); ++i) {
-            if (button_rect(buttons_[i]).contains(e.button.x, e.button.y)) {
+            if (button_rect(buttons_[i]).contains(mx, my)) {
                 pressed_btn_ = i;
                 return true;
             }
         }
-        return top_bar_rect().contains(e.button.x, e.button.y) ||
-               bottom_bar_rect().contains(e.button.x, e.button.y);
+        return top_bar_rect().contains(mx, my) ||
+               bottom_bar_rect().contains(mx, my);
     }
 
     if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) {

@@ -135,6 +135,7 @@ Region Region::load(const std::filesystem::path& path) {
     region.terrain_ = decode_terrain_rle(map.terrain.data, map.width, map.height);
     region.heightmap_ = decode_heightmap(map.heightmap.data, map.width, map.height);
     region.texture_index_ = decode_texture_index_rle(map.texture_index.data, map.width, map.height);
+    region.connectivity_.assign(static_cast<std::size_t>(map.width) * map.height, TileConnectivity{});
     region.sea_level_ = region.heightmap_.empty()
                              ? 0
                              : *std::min_element(region.heightmap_.begin(), region.heightmap_.end());

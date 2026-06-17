@@ -39,24 +39,32 @@ void UIManager::close(Widget* dialog) {
 }
 
 bool UIManager::handle_event(const SDL_Event& e) {
-    // Dialogs are above the HUD in z-order, so they get first crack at events.
+    // A HUD overlay (e.g. an open dropdown) sits above everything, so it gets
+    // first crack at events.
+    const bool hud_priority = hud_ && hud_->wants_event_priority();
+    if (hud_priority && hud_->handle_event(e)) return true;
+
+    // Dialogs are above the HUD in z-order, so they get next crack at events.
     if (!stack_.empty()) {
         Entry& top = stack_.back();
         const bool consumed = top.widget->handle_event(e);
         if (top.modal) return true;
         if (consumed)  return true;
     }
-    // HUD buttons receive events only when no dialog consumed them.
-    if (hud_) return hud_->handle_event(e);
+    // HUD buttons receive events only when no dialog consumed them (and only if
+    // the HUD didn't already get a priority pass above).
+    if (hud_ && !hud_priority) return hud_->handle_event(e);
     return false;
 }
 
 void UIManager::render() {
-    // HUD is always below the dialog stack.
+    // HUD bars are below the dialog stack...
     if (hud_) hud_->render(renderer_, fonts_);
     for (const auto& entry : stack_) {
         entry.widget->render(renderer_, fonts_);
     }
+    // ...but a HUD overlay (open dropdown) draws on top of the whole stack.
+    if (hud_) hud_->render_overlay(renderer_, fonts_);
 }
 
 }  // namespace opente::ui

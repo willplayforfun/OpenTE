@@ -150,6 +150,10 @@ void BuildMenu::set_strings(BuildMenuStrings strings) {
     text_ = std::move(strings);
 }
 
+void BuildMenu::set_path_sprites(std::map<std::string, SkinSprite> sprites) {
+    path_sprites_ = std::move(sprites);
+}
+
 void BuildMenu::set_confirm_visible(bool visible) {
     confirm_visible_ = visible;
 }
@@ -391,6 +395,23 @@ void BuildMenu::render_list(SDL_Renderer* r, Font* font) const {
 }
 
 void BuildMenu::render_preview(SDL_Renderer* r) const {
+    const BuildMenuEntry* sel = selected_entry();
+
+    if (sel && sel->is_pathway) {
+        const auto it = path_sprites_.find(sel->id);
+        if (it != path_sprites_.end() && it->second.valid()) {
+            const SkinSprite& s = it->second;
+            // Centre the 228x88 path preview sprite in the 272x116 preview rect.
+            const SDL_Rect dst{
+                preview_rect_.x + (preview_rect_.w - s.w) / 2,
+                preview_rect_.y + (preview_rect_.h - s.h) / 2,
+                s.w, s.h,
+            };
+            SDL_RenderCopy(r, s.tex, nullptr, &dst);
+            return;
+        }
+    }
+
     // The recessed preview frame is part of the cons.back art; don't paint a
     // synthetic box over it. (Building sprite preview not yet wired.) Only the
     // fallback no-skin path gets a placeholder box.

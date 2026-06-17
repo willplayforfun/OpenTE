@@ -143,6 +143,17 @@ _SHORE_ATLAS_TAGS = {
     "coa1": "terrain.coa1",
 }
 
+# Network-overlay atlas sub-tags per base culture (Stage D, trail-rendering-plan.md).
+# Container layout: terr/trai/<subtag>, terr/cana/<subtag>, terr/rail/<subtag>.
+# trail1/trail2 are the two 53-cell atlas pages for roads+trails (atlas pages 0xf4/0xf5).
+# canal is the single canal atlas (page 0xf6), rail the single rail atlas (page 0xfa).
+_NETWORK_ATLAS_SUBTAGS: dict[str, dict[str, str]] = {
+    "chi1": {"trail1": "chi1", "trail2": "chi2", "canal": "chi1", "rail": "chi1"},
+    "eur1": {"trail1": "eur1", "trail2": "eur2", "canal": "eur1", "rail": "eur1"},
+    "ind1": {"trail1": "ind1", "trail2": "ind2", "canal": "ind1", "rail": "ind1"},
+    "per1": {"trail1": "per1", "trail2": "per2", "canal": "per1", "rail": "per1"},
+}
+
 # `tran` atlases decode fully opaque (alpha==255 everywhere) with near-black
 # (RGB <= ~0x1F) dither-dot pixels.  Recut to hard alpha so the edge-blend
 # pass (SDL_BLENDMODE_BLEND) shows only the dots.
@@ -223,10 +234,43 @@ def extract_terrain_textures_all_cultures(
                         height=sprite.height,
                     ))
 
+        # Network atlases (trail1/trail2/canal/rail) per-culture.
+        net_subtags = _NETWORK_ATLAS_SUBTAGS.get(culture, {})
+        network_sprite_ids: dict[str, str] = {}
+        for net_key, dir_tag in (("trail1", "trai"), ("trail2", "trai"),
+                                  ("canal", "cana"), ("rail", "rail")):
+            subtag = net_subtags.get(net_key)
+            if not subtag:
+                network_sprite_ids[net_key] = ""
+                continue
+            leaf = find_leaf(terr_root, [dir_tag, subtag])
+            if leaf is None:
+                network_sprite_ids[net_key] = ""
+                continue
+            sprite = decode_sprite(m_ui_data, leaf.abs_off, leaf.size)
+            if sprite is None:
+                network_sprite_ids[net_key] = ""
+                continue
+            net_sprite_id = f"terrain.{culture}.{net_key}"
+            relative_path = Path("sprites") / "terrain" / f"{net_sprite_id}.png"
+            rgba = _apply_dissolve_mask(sprite.rgba)
+            write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, rgba)
+            all_entries.append(SpriteEntry(
+                id=net_sprite_id,
+                file=str(relative_path).replace("\\", "/"),
+                width=sprite.width,
+                height=sprite.height,
+            ))
+            network_sprite_ids[net_key] = net_sprite_id
+
         cultures_json[culture] = {
             "pages": page_sprite_ids,
             "tran": tran_sprite_id,
             "hidd": _HIDD_SPRITE_ID,
+            "trail1": network_sprite_ids.get("trail1", ""),
+            "trail2": network_sprite_ids.get("trail2", ""),
+            "canal": network_sprite_ids.get("canal", ""),
+            "rail": network_sprite_ids.get("rail", ""),
         }
 
     # Shared sprites: shore overlays, map-edge skirt, starfield background.

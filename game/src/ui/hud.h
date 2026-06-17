@@ -42,11 +42,32 @@ public:
 
     void layout(Rect bounds) override;
     void render(SDL_Renderer* renderer, FontCache& fonts) const override;
+    void render_overlay(SDL_Renderer* renderer, FontCache& fonts) const override;
+    bool wants_event_priority() const override { return open_popup_ != Popup::None; }
     bool handle_event(const SDL_Event& e) override;
 
     /// Invoked when any bottom-bar button is clicked. The argument is the
     /// button's 4-letter tag: play/rout/cons/tech/terr/regi/worl/game.
     std::function<void(const std::string&)> on_mode_clicked;
+
+    /// Invoked when the user picks an option from the Game-Speed dropdown.
+    /// `code` is the original game's speed code (0 = PAUSE, 0x80 = ½×,
+    /// 0x100 = 1×, 0x200 = 2×, 0x400 = 4×); `label` is the menu text
+    /// ("PAUSE", "1/2 X", …). The HUD changes NO state itself — the scene
+    /// decides what to do (currently a stub; speed isn't implemented yet).
+    std::function<void(int code, const std::string& label)> on_speed_selected;
+
+    /// Invoked when the user picks a region from the Region dropdown. The
+    /// argument is the index into the list last passed to set_regions().
+    std::function<void(int index)> on_region_selected;
+
+    /// Supplies the Region dropdown's contents (one entry per region in the
+    /// loaded episode) and which one is currently active. The HUD only
+    /// displays this; switching is requested via on_region_selected.
+    void set_regions(std::vector<std::string> names, int current_index = 0) {
+        regions_        = std::move(names);
+        current_region_ = current_index;
+    }
 
     /// Sets which toggle-group button (play/rout/cons/tech) shows as selected.
     /// Pass "" to deactivate all. Has no effect on action buttons.
@@ -89,6 +110,28 @@ private:
 
     const Sprite* sprite(const std::string& id) const;
 
+    // ── Top-bar speed/region dropdowns (dropdown-menus-re.md) ────────────────
+    // The two controls are a display field (rout/butt.a6g) + an open-arrow
+    // (stdc/down.a6g); clicking the arrow drops a panel (tool/regm.a6g frame)
+    // of selectable rows (each row = stdc/sele.a6g highlight + font/sans/9).
+    enum class Popup { None, Speed, Region };
+
+    struct SpeedOption { const char* label; int code; };
+
+    // PAUSE / ½ / 1 / 2 / 4 × with the RE'd speed codes (item+8 values).
+    static const std::vector<SpeedOption>& speed_options();
+
+    int  popup_item_count(Popup p) const;
+    std::string popup_item_label(Popup p, int i) const;
+    Rect popup_panel_rect(Popup p) const;   // regm frame, screen space
+    Rect popup_list_rect(Popup p)  const;   // inner item area (panel-relative inset)
+    Rect popup_item_rect(Popup p, int i) const;
+    void render_popup(SDL_Renderer* r, FontCache& fonts, Popup p) const;
+
+    // Top-bar dropdown-arrow rects (RE rects, anchored to the left edge).
+    Rect speed_arrow_rect()   const { return {sx_left(146), top_y() + 1, 22, 18}; }
+    Rect region_arrow_rect()  const { return {sx_left(429), top_y() + 1, 22, 18}; }
+
     // Canvas-x → screen-x, for left- and right-anchored widgets respectively.
     int sx_left(int cx)  const { return bounds_.x + cx; }
     int sx_right(int cx) const { return bounds_.x + bounds_.w - (kCanvasW - cx); }
@@ -111,6 +154,13 @@ private:
 
     int hovered_btn_ = -1;
     int pressed_btn_ = -1;
+
+    // Dropdown state. The HUD owns only which popup is open and the hover
+    // highlight; all game state changes go out through the callbacks.
+    Popup open_popup_     = Popup::None;
+    int   hovered_item_   = -1;
+    std::vector<std::string> regions_;
+    int   current_region_ = 0;
 
     std::string treasury_    = "0";
     std::string speed_       = "x1";

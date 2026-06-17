@@ -88,6 +88,7 @@ private:
     ui::UIManager                          ui_manager_;
     std::map<std::string, render::Texture> ui_textures_;
     ui::ConsSkin                           cons_skin_;
+    std::map<std::string, ui::SkinSprite>  path_skin_sprites_;  // "trai"/"road"/"rail"/"cana"
 
     bool pan_left_  = false;
     bool pan_right_ = false;

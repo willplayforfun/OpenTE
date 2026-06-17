@@ -7,6 +7,8 @@
 #include <SDL.h>
 #include <imgui.h>
 
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "render/camera.h"
@@ -33,6 +35,17 @@ public:
     /// Draws the full terrain:
     /// base texture pass, shore-overlay pass, and blending for every tile in the region.
     void render(const Camera& camera) const;
+
+    /// Renders trail/road/canal/rail preview sprites for a construction-mode path.
+    /// Rasterizes each waypoint→waypoint segment and the live last-waypoint→cursor
+    /// segment, then draws the appropriate atlas sprite at each affected tile using
+    /// the same LUT/UV machinery as the normal network decal pass.
+    /// Must be called after `render()` so it composites on top of the terrain.
+    /// `path_type` is one of "trai", "road", "cana", "rail".
+    void render_preview_path(const std::vector<std::pair<int,int>>& waypoints,
+                             int cursor_tx, int cursor_ty,
+                             const std::string& path_type,
+                             const Camera& camera) const;
 
     /// Recomputes the per-vertex slope-shading colors (`terrain_vertex_color_`)
     /// from the (immutable) vertex heightmap and the current values of the
@@ -66,6 +79,9 @@ public:
     /// Draw the palette-field 4cc code over each tile's center.
     bool terrain_debug_labels_enabled = false;
 
+    /// "Network overlays": when false, skip the trail/road/canal/rail decal pass.
+    bool network_overlays_enabled = true;
+
 private:
     /// Returns `region_->texture_index_at(tx, ty)`
     int texture_index_at(int tx, int ty) const;
@@ -80,8 +96,19 @@ private:
     /// reusing `corners`' screen positions/colors (only UVs differ from the base pass).
     void render_shore_overlays(int tx, int ty, const SDL_Vertex corners[4]) const;
 
+    /// Draws the trail/road/canal/rail network decal (Stage D) for tile `(tx, ty)`
+    /// using the tile's `TileConnectivity` mask and the three runtime-decoded LUTs.
+    void render_network_decal(int tx, int ty, const SDL_Vertex corners[4]) const;
+
     /// Draws the map-edge skirt (south and east edges of the map diamond).
     void render_skirts(const Camera& camera) const;
+
+    /// Core network-decal drawing logic: applies `conn` to the three LUTs, selects
+    /// the atlas cell, and draws the sprite fan onto `corners` (NW/NE/SE/SW order).
+    /// Called by both `render_network_decal` (real connectivity from Region) and
+    /// `render_preview_path` (synthesized preview connectivity).
+    void draw_network_conn(const world::TileConnectivity& conn,
+                           const SDL_Vertex corners[4]) const;
 
     /// Draws `hidd` (starfield) textured tile fans for all viewport-visible
     /// tiles outside the map bounds.

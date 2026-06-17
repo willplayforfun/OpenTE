@@ -88,21 +88,19 @@ def _decode_raw(blob: bytes) -> tuple[int, int, int, int, bytes, int, int, int] 
     pixel_bytes = num_pixels * bpp
     pixels = blob[_HEADER_SIZE:_HEADER_SIZE + pixel_bytes]
 
-    # Every bg6a row is stored rotated left by a fixed _ROW_WRAP_BYTES (4) — a
-    # surface-pitch artifact: the first 4 bytes of raw pixel data for a row
-    # actually belong at the row's right edge. Un-rotate so column 0 is the
-    # true left edge. This is bytes, not pixels, so it scales with bpp: 4 px at
-    # 8bpp, 2 px at 16bpp, 1 px at 32bpp. (Originally only applied to 8bpp
-    # paletted sprites; it is in fact universal — most visible on narrow sprites
-    # like the 16x120 scrollbar `stdc.vscr`, negligible on wide ones.)
-    row_bytes = width * bpp
-    if _ROW_WRAP_BYTES < row_bytes:
-        unrotated = bytearray(pixel_bytes)
-        for y in range(height):
-            row = pixels[y * row_bytes:(y + 1) * row_bytes]
-            unrotated[y * row_bytes:(y + 1) * row_bytes] = (
-                row[_ROW_WRAP_BYTES:] + row[:_ROW_WRAP_BYTES])
-        pixels = bytes(unrotated)
+    # The whole pixel block is stored rotated left by a fixed _ROW_WRAP_BYTES
+    # (4) — a surface-pitch artifact: the read started 4 bytes into the
+    # contiguous surface. Un-rotate the ENTIRE buffer as one stream, NOT each
+    # row independently. This matters only at the row boundary: a row's left
+    # edge and interior are identical either way, but the 4 wrapped bytes at a
+    # row's right edge belong to the *next* row's start, not its own. Doing it
+    # per-row pulls those bytes from the same row, leaving the rightmost column
+    # (4 px @8bpp, 2 px @16bpp, 1 px @32bpp) shifted DOWN by one row — visible
+    # as a glitched far-right column on narrow sprites like `stdc.vscr`. The
+    # final 4 bytes of the image wrap to the very top, which is correct for the
+    # contiguous read. (Negligible on wide sprites; most visible when narrow.)
+    if 0 < _ROW_WRAP_BYTES < pixel_bytes:
+        pixels = pixels[_ROW_WRAP_BYTES:] + pixels[:_ROW_WRAP_BYTES]
     return width, height, anchor_x, anchor_y, pixels, field3, str_rel, bpp
 
 

@@ -36,6 +36,10 @@ public:
     /// Shore-overlay atlas: `layer` 0 = `terrain.coa0`, 1 = `terrain.coa1`; null if not loaded.
     SDL_Texture* shore(int layer) const;
 
+    /// Network-overlay atlas (Stage D): `layer` 0 = trail1 (0xf4), 1 = trail2 (0xf5),
+    /// 2 = canal (0xf6), 3 = rail (0xfa); null if not loaded.
+    SDL_Texture* network(int layer) const;
+
     /// Map-edge skirt texture (`terrain.edge`); null if not loaded.
     SDL_Texture* edge() const;
 
@@ -43,9 +47,10 @@ public:
     SDL_Texture* hidd() const;
 
 private:
-    std::array<Texture, 14> pages_;  // [0] unused, [1–13] terrain pages (2×2 tiled)
+    std::array<Texture, 14> pages_;     // [0] unused, [1–13] terrain pages (2×2 tiled)
     Texture tran_;
-    std::array<Texture, 2> shores_;
+    std::array<Texture, 2> shores_;     // [0]=coa0, [1]=coa1
+    std::array<Texture, 4> networks_;   // [0]=trail1, [1]=trail2, [2]=canal, [3]=rail
     Texture edge_;
     Texture hidd_;
 };

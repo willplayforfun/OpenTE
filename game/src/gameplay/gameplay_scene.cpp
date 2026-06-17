@@ -32,6 +32,15 @@ constexpr const char* kConsSpriteIds[] = {
     "ui.a_ui.stdc.vscr",   // shared vertical scrollbar (up/down arrows)
 };
 
+// Path-type preview sprites shown in the build-menu preview pane (228×88 each).
+// Each pair is {path id, manifest sprite id}.
+constexpr const char* kPathSpriteIds[][2] = {
+    {"trai", "ui.a_ui.path.trai"},
+    {"road", "ui.a_ui.path.road"},
+    {"rail", "ui.a_ui.path.rail"},
+    {"cana", "ui.a_ui.path.cana"},
+};
+
 }  // namespace
 
 GameplayScene::GameplayScene(SDL_Window* window,
@@ -77,6 +86,20 @@ GameplayScene::GameplayScene(SDL_Window* window,
                 build_menu_ptr_ = nullptr;
             }
         }
+    };
+    // Top-bar Game-Speed dropdown. Speed control isn't implemented yet, so this
+    // is a stub: we just echo the chosen label back into the display. The HUD
+    // changes no state itself — every signal arrives here.
+    hud->on_speed_selected = [this](int code, const std::string& label) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Game speed selected: %s (code 0x%x) — not implemented (stub)",
+                    label.c_str(), code);
+        if (hud_ptr_) hud_ptr_->set_speed(label);
+    };
+    // Top-bar Region dropdown: switch the active region.
+    hud->on_region_selected = [this](int index) {
+        if (world_ && index >= 0 && index < world_->region_count())
+            activate_region(index);
     };
     ui_manager_.set_hud(std::move(hud), win_w, win_h);
 
@@ -145,7 +168,15 @@ void GameplayScene::activate_region(int index) {
               << ", culture: " << (culture.empty() ? "unknown" : culture)
               << ", " << reg.width() << "x" << reg.height() << ")\n";
 
-    if (hud_ptr_) hud_ptr_->set_region_name(reg.name());
+    if (hud_ptr_) {
+        hud_ptr_->set_region_name(reg.name());
+        // Feed the top-bar Region dropdown the episode's region list + current.
+        std::vector<std::string> names;
+        names.reserve(world_->region_count());
+        for (int i = 0; i < world_->region_count(); ++i)
+            names.push_back(world_->region(i).name());
+        hud_ptr_->set_regions(std::move(names), active_region_index_);
+    }
 
     // Load the HQ building sprite for this region's culture.
     hq_sprite_ = {};
@@ -235,6 +266,27 @@ void GameplayScene::load_sprites() {
     if (!cons_skin_.valid()) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "cons panel sprites not found — build menu will use flat colours");
+    }
+
+    // Path preview sprites — load each and build the SkinSprite map.
+    path_skin_sprites_.clear();
+    for (const auto& sprite : registry_->manifest().sprites) {
+        for (const auto& kv : kPathSpriteIds) {
+            if (sprite.id != kv[1]) continue;
+            ui_textures_.emplace(sprite.id,
+                render::Texture::load(renderer_, game_data_dir / sprite.file));
+            const auto& tex = ui_textures_.at(sprite.id);
+            if (tex.valid()) {
+                path_skin_sprites_[kv[0]] = {
+                    tex.handle(), sprite.width, sprite.height,
+                    sprite.anchor_x, sprite.anchor_y,
+                };
+            }
+        }
+    }
+    if (path_skin_sprites_.empty()) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "path preview sprites not found — build menu will use placeholder");
     }
 }
 
@@ -483,6 +535,7 @@ void GameplayScene::toggle_build_menu() {
     bms.cancel        = registry_->text("cons.labl.canc", bms.cancel);
     bms.row           = registry_->text("cons.labl.bnam", bms.row);
     menu->set_strings(std::move(bms));
+    menu->set_path_sprites(path_skin_sprites_);
 
     menu->set_construction_mode_active(construction_mode_.is_active());
     menu->set_confirm_visible(
@@ -597,21 +650,39 @@ void GameplayScene::render_construction_overlays() {
             overlays.push_back(ots);
         }
     } else if (ph == ConstructionPhase::TrailPlacing) {
-        // Cursor preview tile — blue to distinguish from building overlays.
-        render::OverlayTileSet cursor;
-        cursor.anchor_tx       = construction_mode_.cursor_tx();
-        cursor.anchor_ty       = construction_mode_.cursor_ty();
-        cursor.color_override  = {80, 180, 255, 140};
-        overlays.push_back(cursor);
+        const int ctx = construction_mode_.cursor_tx();
+        const int cty = construction_mode_.cursor_ty();
+        const auto& markers = construction_mode_.trail_markers();
+        const world::Region& reg = world_->region(active_region_index_);
+        const int map_w = reg.width();
+        const int map_h = reg.height();
 
-        // Committed trail markers — slightly brighter blue.
-        for (const TrailMarker& m : construction_mode_.trail_markers()) {
-            render::OverlayTileSet ms;
-            ms.anchor_tx      = m.tx;
-            ms.anchor_ty      = m.ty;
-            ms.color_override = {60, 140, 255, 200};
-            overlays.push_back(ms);
+        // Render actual path sprites for the preview via the terrain renderer.
+        if (!markers.empty()) {
+            std::vector<std::pair<int,int>> wpts;
+            wpts.reserve(markers.size());
+            for (const TrailMarker& m : markers)
+                wpts.push_back({m.tx, m.ty});
+            tr->render_preview_path(wpts, ctx, cty,
+                                    construction_mode_.selected_id(), camera_);
         }
+
+        auto add_tile = [&](int tx, int ty, SDL_Color color) {
+            if (tx < 0 || tx >= map_w || ty < 0 || ty >= map_h) return;
+            render::OverlayTileSet ots;
+            ots.anchor_tx      = tx;
+            ots.anchor_ty      = ty;
+            ots.color_override = color;
+            overlays.push_back(ots);
+        };
+
+        // Waypoint markers (bright yellow) show where the user clicked.
+        constexpr SDL_Color kWaypoint = {255, 220, 60, 180};
+        for (const TrailMarker& m : markers)
+            add_tile(m.tx, m.ty, kWaypoint);
+
+        // Cursor tile (subtle orange).
+        add_tile(ctx, cty, {255, 160, 40, 140});
     }
 
     if (!overlays.empty())
@@ -640,12 +711,42 @@ void GameplayScene::render_hud_overlay() {
 bool GameplayScene::pick_tile_from_mouse(int screen_x, int screen_y,
                                           int& out_tx, int& out_ty) const {
     if (!world_) return false;
-    // screen → world (inverse camera projection)
+    // screen → world (inverse camera projection). Only world-Y carries the
+    // terrain-height displacement — the mesh shifts each vertex up by
+    // height·kPixelsPerAltiUnit before zoom (see terrain_renderer.cpp /
+    // area_overlay.cpp); world-X is unaffected.
     const float wx = static_cast<float>(screen_x) / camera_.zoom
                      + camera_.world_pixel_offset.x;
     const float wy = static_cast<float>(screen_y) / camera_.zoom
                      + camera_.world_pixel_offset.y;
-    const render::Vec2 tile = render::world_to_tile(wx, wy);
+
+    // Initial flat pick. This alone matches the original game's cursor
+    // transform (TMapView::fcn.004689a0 — a flat isometric inverse with no
+    // terrain-height term; see documentation/03-exe-analysis.md Round 19).
+    render::Vec2 tile = render::world_to_tile(wx, wy);
+
+    // Height-corrected refinement (better than the original, which used a flat
+    // pick + a height-displaced marker). The surface point under the cursor
+    // was drawn at world-Y `wy` AFTER its terrain height was subtracted, so the
+    // un-displaced world-Y of that surface point is `wy + height·k`. Re-pick
+    // with the corrected Y and iterate to convergence so the highlighted tile
+    // matches the pixel under the cursor on slopes. Converges in 1-2 steps on
+    // smooth terrain; cap at 3 and bail early once the tile stops changing.
+    if (const render::TerrainRenderer* tr = active_terrain_renderer()) {
+        for (int i = 0; i < 3; ++i) {
+            const int stx = static_cast<int>(std::floor(tile.x));
+            const int sty = static_cast<int>(std::floor(tile.y));
+            const float h = tr->sample_height(
+                static_cast<double>(stx) + 0.5, static_cast<double>(sty) + 0.5);
+            const render::Vec2 next = render::world_to_tile(
+                wx, wy + h * render::kPixelsPerAltiUnit);
+            const bool stable = static_cast<int>(std::floor(next.x)) == stx &&
+                                static_cast<int>(std::floor(next.y)) == sty;
+            tile = next;
+            if (stable) break;
+        }
+    }
+
     out_tx = static_cast<int>(std::floor(tile.x));
     out_ty = static_cast<int>(std::floor(tile.y));
     return true;
