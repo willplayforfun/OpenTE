@@ -72,9 +72,17 @@ public:
     const Episode& episode(const std::string& id) const;
     const Event& event(const std::string& id) const;
 
+    /// Looks up a UI/localization string by its dotted key (e.g.
+    /// "cons.labl.titl"), as exported from `text.{}` into the `strings` table.
+    /// Returns `fallback` if the key is absent. Placeholder tokens like
+    /// "[1 cost]" are left intact for the caller to substitute. (Returns by
+    /// value: `fallback` is a parameter, so a reference to it would dangle.)
+    std::string text(const std::string& key, const std::string& fallback = "") const;
+
     const std::map<std::string, Commodity>& commodities() const { return commodities_; }
     const std::map<std::string, Building>& buildings() const { return buildings_; }
     const std::map<std::string, Episode>& episodes() const { return episodes_; }
+    const std::map<std::string, std::string>& strings() const { return strings_; }
 
 private:
     std::filesystem::path game_data_dir_;
@@ -89,6 +97,7 @@ private:
     std::map<std::string, Technology> technologies_;
     std::map<std::string, Episode> episodes_;
     std::map<std::string, Event> events_;
+    std::map<std::string, std::string> strings_;
 };
 
 }  // namespace opente::data

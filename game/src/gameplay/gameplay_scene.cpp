@@ -439,6 +439,23 @@ void GameplayScene::toggle_build_menu() {
 
     auto menu = std::make_unique<ui::BuildMenu>(cons_skin_);
     menu->set_data(build_menu_data_);
+
+    // Panel labels from the extracted `strings` table (cons.labl.*). Each
+    // lookup falls back to the BuildMenuStrings default (the original literal)
+    // if the key is missing. Category order matches the tabs: path/mark/depo/
+    // prod/dema.
+    ui::BuildMenuStrings bms;
+    bms.title         = registry_->text("cons.labl.titl", bms.title);
+    bms.categories[0] = registry_->text("cons.labl.path", bms.categories[0]);
+    bms.categories[1] = registry_->text("cons.labl.mark", bms.categories[1]);
+    bms.categories[2] = registry_->text("cons.labl.depo", bms.categories[2]);
+    bms.categories[3] = registry_->text("cons.labl.prod", bms.categories[3]);
+    bms.categories[4] = registry_->text("cons.labl.dema", bms.categories[4]);
+    bms.confirm       = registry_->text("cons.labl.conf", bms.confirm);
+    bms.cancel        = registry_->text("cons.labl.canc", bms.cancel);
+    bms.row           = registry_->text("cons.labl.bnam", bms.row);
+    menu->set_strings(std::move(bms));
+
     menu->set_construction_mode_active(construction_mode_.is_active());
     menu->set_confirm_visible(
         construction_mode_.phase() == ConstructionPhase::BuildingPinned);

@@ -83,6 +83,8 @@ DataRegistry DataRegistry::load(const std::filesystem::path& game_data_dir) {
             registry.episodes_ = table.get<std::map<std::string, Episode>>();
         } else if (entry.id == "events") {
             registry.events_ = table.get<std::map<std::string, Event>>();
+        } else if (entry.id == "strings") {
+            registry.strings_ = table.get<std::map<std::string, std::string>>();
         }
         // Unknown table ids (e.g. future tables not yet given a typed
         // struct) are simply skipped.
@@ -141,6 +143,11 @@ const Episode& DataRegistry::episode(const std::string& id) const {
 
 const Event& DataRegistry::event(const std::string& id) const {
     return lookup(events_, id, "event");
+}
+
+std::string DataRegistry::text(const std::string& key, const std::string& fallback) const {
+    const auto it = strings_.find(key);
+    return it != strings_.end() ? it->second : fallback;
 }
 
 }  // namespace opente::data

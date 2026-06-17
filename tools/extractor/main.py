@@ -40,6 +40,7 @@ from .tables.episodes import extract_episodes
 from .tables.events import extract_events
 from .tables.guards import extract_guards
 from .tables.json_io import write_json
+from .tables.strings import extract_strings
 from .tables.technologies import extract_technologies
 from .tables.transporters import extract_transporters
 
@@ -300,6 +301,17 @@ def run(game_dir: GameDirectory, output_dir: Path) -> None:
     font_root = parse_tree(font_data, font_footer)
     font_stems = extract_fonts(font_data, font_root, output_dir)
     print(f"  {len(font_stems)} font face/size pairs written")
+
+    # text.{}: UI / localization string table (dotted-key -> string), e.g.
+    # "cons.labl.titl" -> "C O N S T R U C T I O N". Loaded as the `strings`
+    # table; UI code looks strings up by key.
+    print("Extracting UI strings...")
+    text_data, text_footer = load(game_dir.data_dir / "text.{}")
+    text_root = parse_tree(text_data, text_footer)
+    strings = extract_strings(text_data, text_root)
+    write_json(output_dir / "tables" / "strings.json", strings)
+    table_entries.append(TableEntry(id="strings", file="tables/strings.json"))
+    print(f"  {len(strings)} strings written")
 
     print("Writing manifest...")
     manifest = Manifest(sprites=sprite_entries, tables=table_entries, maps=map_entries)

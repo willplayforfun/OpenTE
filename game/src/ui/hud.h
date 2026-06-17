@@ -83,7 +83,9 @@ private:
         int x, y, w, h;         // rect in barb-local coords (widget = ½ sprite)
         bool right_group;       // pinned to the right edge on resize
         bool is_toggle;         // true = toggle group; false = stateless action
-        const char* tooltip;    // shown in bottom-bar center while hovered
+        const char* tooltip;    // bottom-bar center hint while hovered; an
+                                // embedded '\n' splits it into the original's
+                                // two-line (name / description) hot1+hot2 form
     };
 
     const Sprite* sprite(const std::string& id) const;

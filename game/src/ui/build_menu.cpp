@@ -82,6 +82,40 @@ void draw_right(SDL_Renderer* r, Font* f,
 // container widgets (no readable text). So every label here draws verbatim with
 // the correct face — no transform. See documentation/cons-panel-re.md.
 
+// Substitutes positional placeholder tokens "[N word…]" in a `text.{}` template
+// with args[N-1] (1-based index), e.g. "CONFIRM ([1 cost] coins)" + {"50"} ->
+// "CONFIRM (50 coins)". A token whose index has no matching arg is dropped.
+// Non-token text (and any '[' that isn't a "[<digits> …]" token) is copied
+// verbatim. Mirrors how the original fills cons.labl.conf/bnam at runtime.
+std::string substitute(const std::string& tmpl,
+                       const std::vector<std::string>& args) {
+    std::string out;
+    out.reserve(tmpl.size());
+    for (std::size_t i = 0; i < tmpl.size(); ++i) {
+        if (tmpl[i] == '[') {
+            const std::size_t close = tmpl.find(']', i);
+            if (close != std::string::npos) {
+                std::size_t j = i + 1;
+                int idx = 0;
+                bool have = false;
+                while (j < close && std::isdigit(static_cast<unsigned char>(tmpl[j]))) {
+                    idx = idx * 10 + (tmpl[j] - '0');
+                    have = true;
+                    ++j;
+                }
+                if (have) {  // a real "[N …]" token — replace the whole bracket
+                    if (idx >= 1 && idx <= static_cast<int>(args.size()))
+                        out += args[idx - 1];
+                    i = close;  // skip to ']'
+                    continue;
+                }
+            }
+        }
+        out += tmpl[i];
+    }
+    return out;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -110,6 +144,10 @@ void BuildMenu::set_data(const BuildMenuData& data) {
     selected_row_  = -1;
     scroll_offset_ = 0;
     hover_row_     = -1;
+}
+
+void BuildMenu::set_strings(BuildMenuStrings strings) {
+    text_ = std::move(strings);
 }
 
 void BuildMenu::set_confirm_visible(bool visible) {
@@ -337,10 +375,14 @@ void BuildMenu::render_list(SDL_Renderer* r, Font* font) const {
 
         const SDL_Color tc = kColWhite;   // list rows are white in the original
 
-        std::string cs = entries[i].label;
-        if (entries[i].cost > 0)
-            cs += " " + std::to_string(entries[i].cost) + " coins";
-        // Rows use sans/9 (a small-caps face) drawn verbatim — no transform.
+        // Row label from cons.labl.bnam = "[1 building]   [2 cost] coins";
+        // pathways (cost 0) just show the name. Rows use sans/9 (a small-caps
+        // face) drawn verbatim — no transform.
+        const std::string cs =
+            entries[i].cost > 0
+                ? substitute(text_.row, {entries[i].label,
+                                         std::to_string(entries[i].cost)})
+                : entries[i].label;
         draw_left(r, font, list_rect_.x + 6, sy, kRowHeight, cs.c_str(), tc);
     }
 
@@ -425,12 +467,11 @@ void BuildMenu::render_bottom_buttons(SDL_Renderer* r, Font* font) const {
         } else {
             sdl_fill(r, conf_rect_, 40, 80, 40, 220);
         }
-        // Data string cons.labl.conf = "CONFIRM     ([1 cost] coins)" — all-caps,
-        // so seri renders "CONFIRM" as full caps ("coins" is lower → small caps).
-        std::string label = "CONFIRM";
+        // cons.labl.conf = "CONFIRM     ([1 cost] coins)" — [1 cost] filled with
+        // the selected building's cost. All-caps source → seri full caps.
         const BuildMenuEntry* sel = selected_entry();
-        if (sel && sel->cost > 0)
-            label += "     (" + std::to_string(sel->cost) + " coins)";
+        const int cost = (sel && sel->cost > 0) ? sel->cost : 0;
+        const std::string label = substitute(text_.confirm, {std::to_string(cost)});
         draw_left(r, font, conf_rect_.x + 46, conf_rect_.y, conf_rect_.h,
                   label.c_str(), kColCat);
     }
@@ -443,10 +484,10 @@ void BuildMenu::render_bottom_buttons(SDL_Renderer* r, Font* font) const {
         } else {
             sdl_fill(r, canc_rect_, 55, 35, 35, 200);
         }
-        // Data string cons.labl.canc = "Exit construction mode" — mixed case,
-        // so seri renders it as small caps (full E + small capitals).
+        // cons.labl.canc = "Exit construction mode" — mixed case, so seri
+        // renders it as small caps (full E + small capitals).
         draw_left(r, font, canc_rect_.x + 46, canc_rect_.y, canc_rect_.h,
-                  "Exit construction mode", kColCat);
+                  text_.cancel.c_str(), kColCat);
     }
 }
 
@@ -492,7 +533,7 @@ void BuildMenu::render(SDL_Renderer* r, FontCache& fonts) const {
                  30, 34, 52, 255);
         draw_centred(r, f_title,
                         {menu_rect_.x, menu_rect_.y, menu_rect_.w, kTitleH},
-                        "C O N S T R U C T I O N", kColTitle);
+                        text_.title.c_str(), kColTitle);
         SDL_SetRenderDrawColor(r, 80, 80, 120, 200);
         SDL_RenderDrawLine(r,
                            menu_rect_.x, menu_rect_.y + kTitleH,
@@ -500,13 +541,13 @@ void BuildMenu::render(SDL_Renderer* r, FontCache& fonts) const {
     }
 
     // Title text (drawn into the 'titl' rect when running with the skin; the
-    // fallback path already drew its own header above). The verbatim data string
-    // cons.labl.titl is "C O N S T R U C T I O N" — all-caps AND space-separated
-    // in the data, so seri renders it as spaced full capitals.
+    // fallback path already drew its own header above). cons.labl.titl is
+    // "C O N S T R U C T I O N" — all-caps AND space-separated in the data, so
+    // seri renders it as spaced full capitals.
     if (skin_.valid()) {
         const Rect title{menu_rect_.x + kTitleX, menu_rect_.y + kTitleY,
                          kTitleW, kTitleH};
-        draw_centred(r, f_title, title, "C O N S T R U C T I O N", kColTitle);
+        draw_centred(r, f_title, title, text_.title.c_str(), kColTitle);
     }
 
     // Five category rows — thin text rows; the active row gets the 'sele'
@@ -526,9 +567,10 @@ void BuildMenu::render(SDL_Renderer* r, FontCache& fonts) const {
             }
         }
 
-        // Original draws all category rows in the same tan; the active row is
-        // indicated by the green 'sele' bar, not a brighter text colour.
-        draw_centred(r, f_cat, tr, kTabs[i].label, kColCat);
+        // Category label from cons.labl.{path,mark,depo,prod,dema}. The original
+        // draws all rows in the same tan; the active row is shown by the 'sele'
+        // bar, not a brighter text colour.
+        draw_centred(r, f_cat, tr, text_.categories[i].c_str(), kColCat);
     }
 
     render_list(r, f_list);

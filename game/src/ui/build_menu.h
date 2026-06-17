@@ -44,6 +44,22 @@ struct BuildMenuData {
     std::vector<BuildMenuEntry> tabs[kNumTabs];
 };
 
+/// UI label strings for the panel, resolved from the extracted `strings` table
+/// (`cons.labl.*`). The defaults mirror the original data verbatim, so the menu
+/// still renders correctly if the string table is unavailable. Some strings are
+/// TEMPLATES carrying positional placeholders like `[1 cost]` / `[1 building]`,
+/// which BuildMenu substitutes at render time with the live value.
+struct BuildMenuStrings {
+    std::string title = "C O N S T R U C T I O N";   // cons.labl.titl
+    // Category labels, indexed to match the tab order: path, mark, depo, prod, dema.
+    std::string categories[BuildMenuData::kNumTabs] = {
+        "PATHWAYS", "MARKETS", "DEPOTS", "PRODUCTION BUILDINGS", "DEMAND BUILDINGS",
+    };
+    std::string confirm = "CONFIRM     ([1 cost] coins)";   // cons.labl.conf (template)
+    std::string cancel  = "Exit construction mode";         // cons.labl.canc
+    std::string row     = "[1 building]   [2 cost] coins";  // cons.labl.bnam (template)
+};
+
 // --- Widget ------------------------------------------------------------------
 
 class BuildMenu : public Widget {
@@ -57,6 +73,10 @@ public:
     // Populate all 5 tabs from pre-built data (call after construction or
     // whenever the available-buildings set changes).
     void set_data(const BuildMenuData& data);
+
+    // Set the panel's label strings (from the extracted `strings` table). If
+    // never called, the BuildMenuStrings defaults (the original literals) apply.
+    void set_strings(BuildMenuStrings strings);
 
     // Show/grey the CONFIRM button. Pass true when a building is pinned.
     void set_confirm_visible(bool visible);
@@ -162,6 +182,7 @@ private:
     // State
     // ---------------------------------------------------------------------------
     ConsSkin skin_;
+    BuildMenuStrings text_;
 
     std::vector<BuildMenuEntry> tab_entries_[kNumTabs];
 

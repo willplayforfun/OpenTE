@@ -38,16 +38,23 @@ HudBars::HudBars(SDL_Renderer* renderer, const data::DataRegistry& registry) {
     }
 
     // tag, sprite_id, x, y, w, h, right_group, is_toggle, tooltip
-    // (barb-local rects, RE-verified)
+    // (barb-local rects, RE-verified).
+    //
+    // Tooltips are the original game's verbatim hint strings. They are NOT in
+    // text.{} (the `strings` table) — they're the EXE-default (name, hint) pairs
+    // the toolbar setup loads into the hot1/hot2 center-band sub-views (the .ini
+    // `*Button_Text`/`*Button_Hint` keys are dev overrides; retail uses these).
+    // The toggle/control buttons show TWO lines (name + "Click to…" hint); the
+    // three map buttons show only the name. We encode the second line with '\n'.
     buttons_ = {
-        {"play", "ui.a_ui.tool.play", 28,  14, 35, 33, false, true,  "Merchants"},
-        {"rout", "ui.a_ui.tool.rout", 84,  14, 35, 33, false, true,  "Routes"},
-        {"cons", "ui.a_ui.tool.cons", 141, 14, 35, 33, false, true,  "Build"},
-        {"tech", "ui.a_ui.tool.tech", 197, 14, 35, 33, false, true,  "Technologies"},
-        {"terr", "ui.a_ui.tool.terr", 765, 12, 35, 33, true,  false, "Terrain View"},
-        {"regi", "ui.a_ui.tool.regi", 816, 12, 36, 33, true,  false, "Region Overview"},
-        {"worl", "ui.a_ui.tool.wmap", 866, 12, 35, 33, true,  false, "World Overview"},
-        {"game", "ui.a_ui.tool.game", 966, 12, 35, 33, true,  false, "Main Menu"},
+        {"play", "ui.a_ui.tool.play", 28,  14, 35, 33, false, true,  "Merchants Button\nClick to display or hide Roster&Info panel"},
+        {"rout", "ui.a_ui.tool.rout", 84,  14, 35, 33, false, true,  "Routes Button\nClick to display or hide Route panel"},
+        {"cons", "ui.a_ui.tool.cons", 141, 14, 35, 33, false, true,  "Construction Button\nClick to display or hide Construction panel"},
+        {"tech", "ui.a_ui.tool.tech", 197, 14, 35, 33, false, true,  "Advances Button\nClick to display or hide Advances panel"},
+        {"terr", "ui.a_ui.tool.terr", 765, 12, 35, 33, true,  false, "Terrain Map Button"},
+        {"regi", "ui.a_ui.tool.regi", 816, 12, 36, 33, true,  false, "Region Map Button"},
+        {"worl", "ui.a_ui.tool.wmap", 866, 12, 35, 33, true,  false, "Episode Map Button"},
+        {"game", "ui.a_ui.tool.game", 966, 12, 35, 33, true,  false, "Game Control Button\nClick to save, load, change options, or quit"},
     };
 }
 
@@ -110,16 +117,27 @@ void HudBars::render(SDL_Renderer* renderer, FontCache& fonts) const {
         blit(renderer, *s, frame, b.w, button_rect(b));
     }
 
-    // Tooltip in the bottom-bar center area.
+    // Tooltip in the bottom-bar center area. The original draws it across the
+    // hot1/hot2/hot3 sub-views (toolbar-re.md Phase 3, barb-local rects):
+    //   hot1 = (287,12,450,14) top half, hot2 = (287,26,450,14) bottom half,
+    //   hot3 = (271,12,482,29) full area.
+    // Toggle/control buttons carry a 2-line "name\nhint" tip → name in hot1,
+    // hint in hot2. Map buttons (and the idle tooltip_) are 1 line → hot3.
     const char* tip_cstr = nullptr;
     if (hovered_btn_ >= 0 && hovered_btn_ < static_cast<int>(buttons_.size()))
         tip_cstr = buttons_[hovered_btn_].tooltip;
-    const std::string& tip = tip_cstr ? std::string(tip_cstr) : tooltip_;
+    const std::string tip = tip_cstr ? std::string(tip_cstr) : tooltip_;
     if (!tip.empty()) {
-        // hot3 rect from toolbar-re.md Phase 3: x=271, y=12, w=482, h=29
-        // (barb-local, i.e. relative to barb's top-left).
-        const Rect tip_box = {sx_left(271), bottom_y() + 12, 482, 29};
-        draw_label(renderer, fonts, tip, tip_box, kText, /*center_h=*/true);
+        const std::size_t nl = tip.find('\n');
+        if (nl == std::string::npos) {
+            draw_label(renderer, fonts, tip,
+                       {sx_left(271), bottom_y() + 12, 482, 29}, kText, /*center_h=*/true);
+        } else {
+            draw_label(renderer, fonts, tip.substr(0, nl),
+                       {sx_left(287), bottom_y() + 12, 450, 14}, kText, /*center_h=*/true);
+            draw_label(renderer, fonts, tip.substr(nl + 1),
+                       {sx_left(287), bottom_y() + 26, 450, 14}, kText, /*center_h=*/true);
+        }
     }
 
     // ── Top bar (bart) ─────────────────────────────────────────────────────
