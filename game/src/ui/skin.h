@@ -32,18 +32,28 @@ struct SkinSprite {
 /// `ui.a_ui.cons.*` sprites extracted from `a_ui,6.{}`.
 ///
 /// Verified sprite sizes and anchors (from manifest):
-///   background  306×696  anchor=(1,17)   — full panel frame
-///   selection   240×20   anchor=(15,82)  — row hover/selection bar
-///   confirm_btn  64×29   anchor=(24,635) — place/confirm button
-///   cancel_btn   64×29   anchor=(25,665) — cancel/close button
+///   background    306×696  anchor=(1,17)   — full panel frame
+///   selection     240×20   anchor=(15,82)  — CATEGORY-row highlight (cons.sele)
+///   row_selection 194×17   anchor=(39,123) — BUILDING-LIST row highlight
+///                                            (stdc.sele; this is what the
+///                                            original uses for list rows, NOT
+///                                            cons.sele — see 0x427380)
+///   confirm_btn    64×29   anchor=(24,635) — place/confirm button
+///   cancel_btn     64×29   anchor=(25,665) — cancel/close button
 struct ConsSkin {
-    SkinSprite background;   // ui.a_ui.cons.back
-    SkinSprite selection;    // ui.a_ui.cons.sele
-    SkinSprite confirm_btn;  // ui.a_ui.cons.conf
-    SkinSprite cancel_btn;   // ui.a_ui.cons.canc
-    // ui.a_ui.stdc.vscr — vertical scrollbar sheet, 16x120 = 4 frames of 16x30:
-    //   [0] up arrow normal, [1] up pressed, [2] down normal, [3] down pressed.
-    // (The thumb is not in the sheet; the original draws it procedurally.)
+    SkinSprite background;     // ui.a_ui.cons.back
+    SkinSprite selection;      // ui.a_ui.cons.sele  — category highlight (240×20)
+    SkinSprite row_selection;  // ui.a_ui.stdc.sele  — list-row highlight (194×17)
+    SkinSprite confirm_btn;    // ui.a_ui.cons.conf
+    SkinSprite cancel_btn;     // ui.a_ui.cons.canc
+    // ui.a_ui.stdc.vscr — vertical scrollbar sheet, 16x120. The original
+    // partitions it via the engine arrow metric A = (height-16)/4 = 26 (see
+    // build_menu.cpp arrow_extent / cons-scrollbar-re.md):
+    //   y0..26   up arrow (normal), y26..52 up arrow (pressed),
+    //   y52..56  thumb top cap, y56..60 thumb middle (tiled), y60..64 bottom cap,
+    //   y64..68  track groove (4px, tiled),
+    //   y68..94  down arrow (normal), y94..120 down arrow (pressed).
+    // The thumb is composited from the y52..64 band, not a standalone frame.
     SkinSprite scrollbar;
 
     bool valid() const { return background.valid(); }

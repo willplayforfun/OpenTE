@@ -86,14 +86,19 @@ def _resolve_game_directory(arg: str | None) -> GameDirectory:
     return _prompt_for_game_directory()
 
 
-def _extract_tables(data: bytes, root: DirNode, output_dir: Path) -> tuple[list[TableEntry], dict[str, Any]]:
+def _extract_tables(data: bytes, root: DirNode, output_dir: Path,
+                    bldg_data: bytes | None = None,
+                    bldg_root: DirNode | None = None) -> tuple[list[TableEntry], dict[str, Any]]:
     tables_dir = output_dir / "tables"
     tables_dir.mkdir(parents=True, exist_ok=True)
 
     entries = []
     results: dict[str, Any] = {}
     for table_id, extractor in _TABLE_EXTRACTORS:
-        table = extractor(data, root)
+        if table_id == "buildings" and bldg_data is not None and bldg_root is not None:
+            table = extractor(data, root, bldg_data, bldg_root)
+        else:
+            table = extractor(data, root)
         results[table_id] = table
         relative_path = Path("tables") / f"{table_id}.json"
         write_json(output_dir / relative_path, table)
@@ -234,13 +239,16 @@ def run(game_dir: GameDirectory, output_dir: Path) -> None:
     data_data, data_footer = load(game_dir.data_dir / "data.{}")
     data_root = parse_tree(data_data, data_footer)
 
-    table_entries, tables = _extract_tables(data_data, data_root, output_dir)
+    # Load bldg.{} before tables so extract_buildings can read futx/futy footprints.
+    bldg_data, bldg_footer = load(game_dir.data_dir / "bldg.{}")
+    bldg_root = parse_tree(bldg_data, bldg_footer)
+
+    table_entries, tables = _extract_tables(data_data, data_root, output_dir,
+                                             bldg_data=bldg_data, bldg_root=bldg_root)
     for entry in table_entries:
         print(f"  wrote table '{entry.id}' -> {entry.file}")
 
     print("Discovering and extracting maps...")
-    bldg_data, bldg_footer = load(game_dir.data_dir / "bldg.{}")
-    bldg_root = parse_tree(bldg_data, bldg_footer)
 
     map_entries, sprite_entries = _extract_maps(game_dir, data_data, data_root, bldg_data, bldg_root,
                                                   tables["buildings"], tables["episodes"], output_dir)

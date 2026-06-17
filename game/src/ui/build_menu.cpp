@@ -1,6 +1,7 @@
 #include "ui/build_menu.h"
 
 #include <algorithm>
+#include <cctype>
 #include <string>
 
 #include "render/font.h"
@@ -73,6 +74,14 @@ void draw_right(SDL_Renderer* r, Font* f,
     f->draw_text_shadowed(r, text, x, y, c, kTextShadow);
 }
 
+// NOTE: the original engine has NO small-caps / uppercase / scaling code
+// (confirmed by disassembling the whole text path 0x56dc00 -> 0x5b6bf0 ->
+// 0x5b6770 + glyph blit 0x584330). The small-caps look comes entirely from the
+// `seri` and `sans` bitmap fonts, whose lowercase codepoints ARE small-capital
+// glyphs. `clea` is the only mixed-case face and is used only on sprite-backed
+// container widgets (no readable text). So every label here draws verbatim with
+// the correct face — no transform. See documentation/cons-panel-re.md.
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -109,6 +118,11 @@ void BuildMenu::set_confirm_visible(bool visible) {
 
 void BuildMenu::set_construction_mode_active(bool active) {
     construction_mode_active_ = active;
+}
+
+void BuildMenu::clear_selection() {
+    selected_id_.clear();
+    selected_row_ = -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,14 +205,26 @@ void BuildMenu::switch_tab(int tab) {
 // Rendering helpers
 // ---------------------------------------------------------------------------
 
+// Arrow button height. The original computes a single "arrow metric" from the
+// scroll sprite's height: A = (sprite_h - 16) / 4 (0x572d80). For the stock
+// 16x120 vscr that yields 26 — the up/down arrow glyphs are 26px tall (NOT 16
+// and NOT the 24 the earlier notes guessed). Falls back to kArrowFallbackH
+// when no skin sprite is loaded (drives only the synthetic flat bar).
+int BuildMenu::arrow_extent() const noexcept {
+    if (skin_.valid() && skin_.scrollbar.valid())
+        return (skin_.scrollbar.h - 16) / 4;
+    return kArrowFallbackH;
+}
+
 // Computes the scrollbar sub-rects. The 16px column sits at the list's right
-// edge (the original list reserves this gutter to the right of its 240px row
+// edge (the original list reserves this gutter to the right of its row
 // content). Returns true if the content overflows (thumb is movable).
 bool BuildMenu::scrollbar_geom(Rect& up, Rect& down, Rect& track,
                                Rect& thumb) const {
+    const int arrow_h = arrow_extent();
     const int bx = list_rect_.x + list_rect_.w - kScrollW;
-    up   = {bx, list_rect_.y, kScrollW, kArrowH};
-    down = {bx, list_rect_.y + list_rect_.h - kArrowH, kScrollW, kArrowH};
+    up   = {bx, list_rect_.y, kScrollW, arrow_h};
+    down = {bx, list_rect_.y + list_rect_.h - arrow_h, kScrollW, arrow_h};
     const int track_y = up.y + up.h;
     const int track_h = down.y - track_y;
     track = {bx, track_y, kScrollW, track_h};
@@ -229,10 +255,21 @@ void BuildMenu::render_scrollbar(SDL_Renderer* r) const {
         return;
     }
 
-    SDL_Texture* tex = skin_.scrollbar.tex;
-    const int sh = skin_.scrollbar.h;   // 120
+    // The original draws the scrollbar ONLY when the content actually overflows
+    // — when the list fits, AScroller::paint takes the jle at 0x5730bf and emits
+    // nothing (no arrows, no track). Match that: a non-scrolling list shows the
+    // bare panel art, no bar.
+    if (!scrollable) return;
 
-    // Blit a 16xh source slice of vscr (srcY, srcH) into dst.
+    SDL_Texture* tex = skin_.scrollbar.tex;
+
+    // Engine arrow metric A (see arrow_extent / 0x572d80). For the 16x120 sheet
+    // A = 26; the source rects below are all expressed relative to A so they
+    // track the sprite. twoA = 2A is the start of the thumb/track band.
+    const int A    = arrow_extent();
+    const int twoA = 2 * A;
+
+    // Blit a kScrollW-wide source slice of vscr (srcY, srcH) into dst.
     auto blit = [&](int srcY, int srcH, const Rect& dst) {
         const SDL_Rect src{0, srcY, kScrollW, srcH};
         const SDL_Rect d = dst.to_sdl();
@@ -244,22 +281,26 @@ void BuildMenu::render_scrollbar(SDL_Renderer* r) const {
             blit(srcY, kSliceH, {x, y, kScrollW, std::min(kSliceH, y1 - y)});
     };
 
-    // Track (background bar): tiled groove slice down the full track.
-    fill_tiled(kTrackTile, track.x, track.y, track.y + track.h);
+    // Track groove (page-up + page-down regions): tiled 4px slice @ srcY 2A+12,
+    // down the full track. The opaque thumb is painted over the middle.
+    fill_tiled(twoA + 12, track.x, track.y, track.y + track.h);
 
-    // Slider (foreground thumb): 3-part vertical — top cap, tiled middle,
-    // bottom cap (each a 4px source slice).
-    if (scrollable && thumb.h >= 2 * kSliceH) {
-        blit(kSlidTop, kSliceH, {thumb.x, thumb.y, kScrollW, kSliceH});
-        fill_tiled(kSlidMid, thumb.x, thumb.y + kSliceH, thumb.y + thumb.h - kSliceH);
-        blit(kSlidBot, kSliceH, {thumb.x, thumb.y + thumb.h - kSliceH, kScrollW, kSliceH});
-    } else if (scrollable) {
-        blit(kSlidMid, kSliceH, thumb);
+    // Slider thumb: 3-part vertical — top cap (2A), tiled middle (2A+4), bottom
+    // cap (2A+8), each a 4px source slice.
+    if (thumb.h >= 2 * kSliceH) {
+        blit(twoA,     kSliceH, {thumb.x, thumb.y, kScrollW, kSliceH});
+        fill_tiled(twoA + 4, thumb.x, thumb.y + kSliceH, thumb.y + thumb.h - kSliceH);
+        blit(twoA + 8, kSliceH, {thumb.x, thumb.y + thumb.h - kSliceH, kScrollW, kSliceH});
+    } else {
+        blit(twoA + 4, kSliceH, thumb);
     }
 
-    // Arrow buttons: up = top 16px of vscr, down = bottom 16px.
-    blit(kVscrUp, kArrowH, up);
-    blit(sh - kArrowH, kArrowH, down);
+    // Arrow buttons. Normal frames: up @ srcY 0, down @ srcY 2A+16. While an
+    // arrow is held the engine swaps in the pressed frame (up @ A, down @ 3A+16).
+    const int up_src   = (pressed_arrow_ == 1) ? A          : 0;
+    const int down_src = (pressed_arrow_ == 2) ? (3 * A + 16) : (twoA + 16);
+    blit(up_src,   A, up);
+    blit(down_src, A, down);
 }
 
 void BuildMenu::render_list(SDL_Renderer* r, Font* font) const {
@@ -272,18 +313,20 @@ void BuildMenu::render_list(SDL_Renderer* r, Font* font) const {
         if (sy + kRowHeight <= list_rect_.y) continue;
         if (sy >= list_rect_.y + list_rect_.h)   break;
 
-        // Row highlight uses the green textured 'sele' sprite (240x20),
-        // the game's one selection bar (cons.sele). The list rows are this
-        // sprite's width, narrower than the list frame.
-        const int row_w = (skin_.valid() && skin_.selection.valid())
-                              ? skin_.selection.w : list_rect_.w;
+        // Row highlight uses the stdc.sele sprite (194×17) — the bar the
+        // original game draws for building-list rows (see 0x427380). It is
+        // NARROWER than the list frame and flush at the list's left edge, so it
+        // sits inside the panel's recessed list groove. (cons.sele, 240×20, is a
+        // different bar used only for the category rows.)
+        const bool has_row_sprite = skin_.valid() && skin_.row_selection.valid();
+        const int row_w = has_row_sprite ? skin_.row_selection.w : kRowWidth;
 
         if (i == selected_row_) {
-            if (skin_.valid() && skin_.selection.valid()) {
-                const int vy = sy + (kRowHeight - skin_.selection.h) / 2;
+            if (has_row_sprite) {
+                const int vy = sy + (kRowHeight - skin_.row_selection.h) / 2;
                 const SDL_Rect dst{list_rect_.x, vy,
-                                   skin_.selection.w, skin_.selection.h};
-                SDL_RenderCopy(r, skin_.selection.tex, nullptr, &dst);
+                                   skin_.row_selection.w, skin_.row_selection.h};
+                SDL_RenderCopy(r, skin_.row_selection.tex, nullptr, &dst);
             } else {
                 sdl_fill(r, {list_rect_.x, sy, row_w, kRowHeight},
                          60, 80, 30, 200);
@@ -294,10 +337,10 @@ void BuildMenu::render_list(SDL_Renderer* r, Font* font) const {
 
         const SDL_Color tc = kColWhite;   // list rows are white in the original
 
-        std::string cs = entries[i].label.c_str();
-        if (entries[i].cost > 0) {
-            cs = cs + " " + std::to_string(entries[i].cost) + " coins";
-        }
+        std::string cs = entries[i].label;
+        if (entries[i].cost > 0)
+            cs += " " + std::to_string(entries[i].cost) + " coins";
+        // Rows use sans/9 (a small-caps face) drawn verbatim — no transform.
         draw_left(r, font, list_rect_.x + 6, sy, kRowHeight, cs.c_str(), tc);
     }
 
@@ -315,34 +358,31 @@ void BuildMenu::render_preview(SDL_Renderer* r) const {
     }
 }
 
-void BuildMenu::render_info(SDL_Renderer* r, Font* font) const {
+void BuildMenu::render_info(SDL_Renderer* r, Font* name_font, Font* body_font) const {
 
     const BuildMenuEntry* sel = selected_entry();
-    if (!sel || !font) return;
+    if (!sel || !name_font || !body_font) return;
 
     const int mx = menu_rect_.x, my = menu_rect_.y;
-    const int lh   = font->ascender() + font->descender();
-    const int step = lh + 3;
 
-    // Title: the building name, centred in the 'desc' label widget which sits
-    // ABOVE the body box (original: label +0xa80 @ y=461; body +0x900 @ y=486,
-    // with an engraved groove between — the "divider line").
+    // Name: centred in the 'desc' label widget (+0xa80 @ y=461), seri/10 — a
+    // small-caps face, so it renders small-caps verbatim. Sits ABOVE the body
+    // box (+0x900 @ y=486), with the engraved groove between as the divider.
     const Rect title_rc{mx + kDLblX, my + kDLblY, kDLblW, kDLblH};
-    draw_centred(r, font, title_rc, sel->label.c_str(), kColWhite);
+    draw_centred(r, name_font, title_rc, sel->label.c_str(), kColWhite);
 
-    // Body: cost + wrapped description, all centred. The 'text' child widget
-    // (+0x9c0) is parented to the desc box at relative (0,0) with width 225,
-    // so the column is the box's left edge .. +225 — centre lines within THAT
-    // column, not the 272 frame (centring on the frame ran the text too wide).
+    // Body: cost + wrapped description, centred (flag 0x855 = h-centre), drawn
+    // in sans/9 (also a small-caps face) verbatim — no scaling/case transform.
+    const int step    = body_font->ascender() + body_font->descender() + 3;
     const int box_cx  = info_rect_.x + kDescContentW / 2;
     const int max_w   = kDescContentW;
     const int bottom  = info_rect_.y + info_rect_.h;
-    int y = info_rect_.y + 6 + font->ascender();
+    int y = info_rect_.y + 6 + body_font->ascender();
 
     auto draw_c = [&](const std::string& s, SDL_Color c) {
         if (s.empty() || y >= bottom) return;
-        const int tw = font->measure_text(s.c_str());
-        font->draw_text_shadowed(r, s.c_str(), box_cx - tw / 2, y, c, kTextShadow);
+        const int tw = body_font->measure_text(s.c_str());
+        body_font->draw_text_shadowed(r, s.c_str(), box_cx - tw / 2, y, c, kTextShadow);
         y += step;
     };
 
@@ -359,7 +399,7 @@ void BuildMenu::render_info(SDL_Renderer* r, Font* font) const {
             if (ch == ' ' || ch == '\0') {
                 const std::string trial = line.empty() ? word : line + " " + word;
                 if (!word.empty() &&
-                    font->measure_text(trial.c_str()) > max_w &&
+                    body_font->measure_text(trial.c_str()) > max_w &&
                     !line.empty()) {
                     draw_c(line, kColWhite);
                     line = word;
@@ -377,41 +417,37 @@ void BuildMenu::render_info(SDL_Renderer* r, Font* font) const {
 }
 
 void BuildMenu::render_bottom_buttons(SDL_Renderer* r, Font* font) const {
-    const bool can_confirm = confirm_visible_;
-
-    // Confirm. The sprite is two 32px frames (normal | pressed); draw one.
-    if (skin_.valid() && skin_.confirm_btn.valid()) {
-        if (!can_confirm)
-            SDL_SetTextureColorMod(skin_.confirm_btn.tex, 80, 80, 80);
-        blit_skin(r, skin_.confirm_btn, dialog_ox_, dialog_oy_,
-                  pressed_btn_ == 1 ? 1 : 0, 2);
-        if (!can_confirm)
-            SDL_SetTextureColorMod(skin_.confirm_btn.tex, 255, 255, 255);
-    } else {
-        sdl_fill(r, conf_rect_,
-                 can_confirm ? 40 : 55,
-                 can_confirm ? 80 : 55,
-                 can_confirm ? 40 : 55, 220);
-    }
-    {
+    // Confirm — only shown when a building is pinned and ready to place.
+    if (confirm_visible_) {
+        if (skin_.valid() && skin_.confirm_btn.valid()) {
+            blit_skin(r, skin_.confirm_btn, dialog_ox_, dialog_oy_,
+                      pressed_btn_ == 1 ? 1 : 0, 2);
+        } else {
+            sdl_fill(r, conf_rect_, 40, 80, 40, 220);
+        }
+        // Data string cons.labl.conf = "CONFIRM     ([1 cost] coins)" — all-caps,
+        // so seri renders "CONFIRM" as full caps ("coins" is lower → small caps).
         std::string label = "CONFIRM";
         const BuildMenuEntry* sel = selected_entry();
         if (sel && sel->cost > 0)
-            label += " (" + std::to_string(sel->cost) + " coins)";
+            label += "     (" + std::to_string(sel->cost) + " coins)";
         draw_left(r, font, conf_rect_.x + 46, conf_rect_.y, conf_rect_.h,
-                  label.c_str(),
-                  can_confirm ? kColCat : SDL_Color{120, 115, 90, 180});
+                  label.c_str(), kColCat);
     }
 
-    // Cancel / exit. Same two-frame sprite layout.
-    if (skin_.valid() && skin_.cancel_btn.valid()) {
-        blit_skin(r, skin_.cancel_btn, dialog_ox_, dialog_oy_,
-                  pressed_btn_ == 2 ? 1 : 0, 2);
-    } else {
-        sdl_fill(r, canc_rect_, 55, 35, 35, 200);
+    // Cancel / exit — only shown once construction mode is active.
+    if (construction_mode_active_) {
+        if (skin_.valid() && skin_.cancel_btn.valid()) {
+            blit_skin(r, skin_.cancel_btn, dialog_ox_, dialog_oy_,
+                      pressed_btn_ == 2 ? 1 : 0, 2);
+        } else {
+            sdl_fill(r, canc_rect_, 55, 35, 35, 200);
+        }
+        // Data string cons.labl.canc = "Exit construction mode" — mixed case,
+        // so seri renders it as small caps (full E + small capitals).
+        draw_left(r, font, canc_rect_.x + 46, canc_rect_.y, canc_rect_.h,
+                  "Exit construction mode", kColCat);
     }
-    draw_left(r, font, canc_rect_.x + 46, canc_rect_.y, canc_rect_.h,
-              "EXIT CONSTRUCTION MODE", kColCat);
 }
 
 // ---------------------------------------------------------------------------
@@ -421,18 +457,29 @@ void BuildMenu::render_bottom_buttons(SDL_Renderer* r, Font* font) const {
 void BuildMenu::render(SDL_Renderer* r, FontCache& fonts) const {
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
 
-    // Per-element fonts, matching the originals set in the layout fn 0x424940
-    // (font-spec strings passed to the text-style setter 0x56d4b0):
-    //   title 'titl'      -> font/seri/11
-    //   category rows     -> font/seri/9
-    //   building list     -> font/clea/10
-    //   description       -> font/clea/10
-    //   conf/canc labels  -> font/seri/10
+    // Per-element fonts, matching the originals (static layout fn 0x424940 +
+    // the dynamic list-row populate fn 0x427380). seri and sans are both
+    // small-caps faces, so small caps render straight from the glyph artwork:
+    //   title 'titl'           -> seri/11   (0x424b32)
+    //   category rows          -> seri/9    (0x424ba2)
+    //   building list ROWS     -> sans/9    (0x427380 @ 0x42755a)
+    //   description name       -> seri/10   (+0xa80)
+    //   description body       -> sans/9    (+0x9c0 @ 0x4259a7)
+    //   conf/canc labels       -> seri/10   (+0x840 / +0x780)
     Font* f_title = fonts.get("seri", 11);
     Font* f_cat   = fonts.get("seri", 9);
-    Font* f_list  = fonts.get("clea", 10);
-    Font* f_desc  = fonts.get("clea", 10);
+    Font* f_list  = fonts.get("sans", 9);
+    Font* f_name  = fonts.get("seri", 10);
+    Font* f_body  = fonts.get("sans", 9);
     Font* f_btn   = fonts.get("seri", 10);
+    // Fall back to the generic UI face if an atlas is missing, so text still
+    // shows (degraded) rather than vanishing.
+    if (!f_title) f_title = fonts.ui();
+    if (!f_cat)   f_cat   = fonts.ui();
+    if (!f_list)  f_list  = fonts.ui();
+    if (!f_name)  f_name  = fonts.ui();
+    if (!f_body)  f_body  = fonts.ui();
+    if (!f_btn)   f_btn   = fonts.ui();
 
     // Background.
     if (skin_.valid()) {
@@ -444,20 +491,22 @@ void BuildMenu::render(SDL_Renderer* r, FontCache& fonts) const {
         sdl_fill(r, {menu_rect_.x, menu_rect_.y, menu_rect_.w, kTitleH},
                  30, 34, 52, 255);
         draw_centred(r, f_title,
-                     {menu_rect_.x, menu_rect_.y, menu_rect_.w, kTitleH},
-                     "CONSTRUCTION", kColTitle);
+                        {menu_rect_.x, menu_rect_.y, menu_rect_.w, kTitleH},
+                        "C O N S T R U C T I O N", kColTitle);
         SDL_SetRenderDrawColor(r, 80, 80, 120, 200);
         SDL_RenderDrawLine(r,
                            menu_rect_.x, menu_rect_.y + kTitleH,
                            menu_rect_.x + menu_rect_.w - 1, menu_rect_.y + kTitleH);
     }
 
-    // Title text (drawn into the 'titl' rect when running with the skin;
-    // the fallback path already drew its own header above).
+    // Title text (drawn into the 'titl' rect when running with the skin; the
+    // fallback path already drew its own header above). The verbatim data string
+    // cons.labl.titl is "C O N S T R U C T I O N" — all-caps AND space-separated
+    // in the data, so seri renders it as spaced full capitals.
     if (skin_.valid()) {
         const Rect title{menu_rect_.x + kTitleX, menu_rect_.y + kTitleY,
                          kTitleW, kTitleH};
-        draw_centred(r, f_title, title, "CONSTRUCTION", kColTitle);
+        draw_centred(r, f_title, title, "C O N S T R U C T I O N", kColTitle);
     }
 
     // Five category rows — thin text rows; the active row gets the 'sele'
@@ -484,7 +533,7 @@ void BuildMenu::render(SDL_Renderer* r, FontCache& fonts) const {
 
     render_list(r, f_list);
     render_preview(r);
-    render_info(r, f_desc);
+    render_info(r, f_name, f_body);
     render_bottom_buttons(r, f_btn);
 }
 
@@ -584,7 +633,7 @@ bool BuildMenu::handle_event(const SDL_Event& e) {
             pressed_btn_ = 1;
             return true;
         }
-        if (canc_rect_.contains(mx, my)) {
+        if (construction_mode_active_ && canc_rect_.contains(mx, my)) {
             pressed_btn_ = 2;
             return true;
         }
@@ -607,7 +656,7 @@ bool BuildMenu::handle_event(const SDL_Event& e) {
             if (on_confirm_clicked) on_confirm_clicked();
             return true;
         }
-        if (was == 2 && canc_rect_.contains(mx, my)) {
+        if (was == 2 && construction_mode_active_ && canc_rect_.contains(mx, my)) {
             if (on_exit_clicked) on_exit_clicked();
             return true;
         }

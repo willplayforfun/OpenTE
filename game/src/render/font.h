@@ -62,6 +62,21 @@ public:
     /// Returns the pixel width of `text` (sum of advance widths).
     int measure_text(const char* text) const;
 
+    // NOTE: there is intentionally NO small-caps helper here. The original
+    // game's small-caps UI text uses the `seri`/`sans` faces, whose lowercase
+    // codepoints are already small-capital glyphs; small caps is a property of
+    // the font, not a render-time transform. Just draw_text() the real face.
+
+    /// Rich-text rendering: supports <b>...</b> (1px horizontal smear bold)
+    /// and <o>...</o> (1px symmetric outline) inline markup.
+    void draw_rich_text(SDL_Renderer* renderer, const char* text,
+                        int x, int baseline_y, SDL_Color color) const;
+    void draw_rich_text_shadowed(SDL_Renderer* renderer, const char* text,
+                                 int x, int baseline_y, SDL_Color color,
+                                 SDL_Color shadow = SDL_Color{0, 0, 0, 255},
+                                 int dx = 1, int dy = 1) const;
+    int measure_rich_text(const char* text) const;
+
     int line_height() const noexcept { return line_height_; }
     int ascender()    const noexcept { return ascender_; }
     int descender()   const noexcept { return descender_; }

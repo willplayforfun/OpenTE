@@ -26,6 +26,7 @@ constexpr const char* kDecorationSpritePrefix = "flor.";
 constexpr const char* kConsSpriteIds[] = {
     "ui.a_ui.cons.back",
     "ui.a_ui.cons.sele",
+    "ui.a_ui.stdc.sele",   // building-list row highlight (194×17)
     "ui.a_ui.cons.conf",
     "ui.a_ui.cons.canc",
     "ui.a_ui.stdc.vscr",   // shared vertical scrollbar (up/down arrows)
@@ -200,11 +201,12 @@ void GameplayScene::load_sprites() {
         return {tex_it->second.handle(), e->width, e->height, e->anchor_x, e->anchor_y};
     };
 
-    cons_skin_.background  = make_skin_sprite("ui.a_ui.cons.back");
-    cons_skin_.selection   = make_skin_sprite("ui.a_ui.cons.sele");
-    cons_skin_.confirm_btn = make_skin_sprite("ui.a_ui.cons.conf");
-    cons_skin_.cancel_btn  = make_skin_sprite("ui.a_ui.cons.canc");
-    cons_skin_.scrollbar   = make_skin_sprite("ui.a_ui.stdc.vscr");
+    cons_skin_.background    = make_skin_sprite("ui.a_ui.cons.back");
+    cons_skin_.selection     = make_skin_sprite("ui.a_ui.cons.sele");
+    cons_skin_.row_selection = make_skin_sprite("ui.a_ui.stdc.sele");
+    cons_skin_.confirm_btn   = make_skin_sprite("ui.a_ui.cons.conf");
+    cons_skin_.cancel_btn    = make_skin_sprite("ui.a_ui.cons.canc");
+    cons_skin_.scrollbar     = make_skin_sprite("ui.a_ui.stdc.vscr");
 
     if (!cons_skin_.valid()) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
@@ -251,6 +253,7 @@ bool GameplayScene::handle_event(const SDL_Event& event) {
                                 auto* m = static_cast<ui::BuildMenu*>(build_menu_ptr_);
                                 m->set_construction_mode_active(false);
                                 m->set_confirm_visible(false);
+                                m->clear_selection();
                             }
                         } else if (ui_manager_.has_open_dialogs()) {
                             if (build_menu_ptr_) {
@@ -461,6 +464,7 @@ void GameplayScene::toggle_build_menu() {
             auto* m = static_cast<ui::BuildMenu*>(build_menu_ptr_);
             m->set_construction_mode_active(false);
             m->set_confirm_visible(false);
+            m->clear_selection();
         }
     };
 

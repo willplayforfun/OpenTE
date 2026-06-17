@@ -14,13 +14,20 @@ namespace opente::ui {
 /// Build/construction menu — replicates TConstructionPanel / TStructurePanel.
 ///
 /// RE-confirmed structure (TStructurePanel slot[1] init @ 0x004263c0):
-///   5 category tabs shown as VERTICAL stacked buttons (path first):
+///   5 category tabs shown as VERTICAL stacked rows (path first):
 ///     PATHWAYS, MARKETS, DEPOTS, PRODUCTION BUILDINGS, DEMAND BUILDINGS
 ///   Each tab has its own scrollable building list.
 ///   The 'path' tab shows trai/road/rail/cana transport type choices.
 ///   Below the list: building sprite preview, then info box (name/cost/desc).
 ///   Confirm (at +0x540) enabled when set_confirm_visible(true); shows cost.
-///   Cancel always enabled; text = "EXIT CONSTRUCTION MODE".
+///   Cancel always enabled; text = "Exit construction mode".
+///
+/// Fonts (per cons-panel-re.md): title/categories/name/labels = seri, list
+/// rows + description body = sans — BOTH are small-caps faces. There is NO
+/// runtime case/scale transform: whether text reads as full caps or small caps
+/// is decided purely by the casing of the source string (cons.labl.<tag>).
+/// All-caps strings (titl, the category labels, CONFIRM) render full caps;
+/// mixed-case strings (Exit construction mode, building names) render small caps.
 
 // --- Data types for caller-supplied tab content ------------------------------
 
@@ -58,6 +65,9 @@ public:
     // construction mode". (Currently cosmetic — always labelled EXIT.)
     void set_construction_mode_active(bool active);
 
+    // Deselect the currently highlighted building row.
+    void clear_selection();
+
     // Callbacks — all optional; set by caller after constructing.
     std::function<void(const std::string& id)> on_item_selected;  // list row clicked
     std::function<void()>                      on_confirm_clicked;
@@ -75,6 +85,10 @@ private:
         const char* type_filter;
         const char* label;
     };
+    // Labels are the verbatim data strings (cons.labl.<tag> in text_strings.tsv).
+    // They are stored ALL-CAPS, so the seri/9 small-caps face renders them as
+    // full capitals — that's where the panel's full-caps headers come from. (The
+    // building names in the list, by contrast, are mixed case → small caps.)
     static constexpr TabDef kTabs[kNumTabs] = {
         {"path", "PATHWAYS"},
         {"mark", "MARKETS"},
@@ -112,19 +126,37 @@ private:
     static constexpr int kConfY = 618;
     static constexpr int kCancY = 650;
 
-    static constexpr int kRowHeight  = 20;
+    // Building-list rows: width 194, height 17 — from the row sub-view rect in
+    // the list-refresh fn 0x427380 (push 0xc2=194 w, 0x11=17 h) and confirmed by
+    // the stdc.sele sprite (194×17). cons.sele (240×20) is the CATEGORY bar, not
+    // this. The row is flush at the list's left edge (sprite anchor_x 39 ≈ list
+    // x 38), so it no longer overhangs the panel's recessed list groove.
+    static constexpr int kRowWidth   = 194;
+    static constexpr int kRowHeight  = 17;
     static constexpr int kScrollStep = kRowHeight * 2;
 
-    // Scrollbar (cons.vscr) slice constants — see documentation/cons-scrollbar-re.md.
-    static constexpr int kScrollW   = 16;
-    static constexpr int kArrowH    = 16;
-    static constexpr int kThumbMinH = 8;
-    static constexpr int kSliceH    = 4;
-    static constexpr int kSlidTop   = 32;
-    static constexpr int kSlidMid   = 36;
-    static constexpr int kSlidBot   = 40;
-    static constexpr int kTrackTile = 44;
-    static constexpr int kVscrUp    = 0;
+    // Scrollbar source map — derived from the original AScroller paint
+    // (0x572fd0) + the arrow-metric helper (0x572d80); blit signature
+    // 0x57f720(target,dstX,dstY,w,h,srcX,srcY) confirmed via the clip 0x5b7510.
+    // See documentation/cons-scrollbar-re.md.
+    //
+    // The engine derives a single "arrow metric" A from the sprite height:
+    //     A = (sprite_h - 16) / 4                       (0x572d80)
+    // For the stock 16x120 vscr that is (120-16)/4 = 26. The bar column width
+    // is W = sprite_w = 16. Every region below is W wide, srcX = 0, and the
+    // eight regions partition the 120px sheet exactly (26+26+4+4+4+4+26+26):
+    //     up arrow     srcY 0        h A   (pressed: srcY A)
+    //     thumb top    srcY 2A       h 4
+    //     thumb middle srcY 2A+4     h 4   (tiled)
+    //     thumb bottom srcY 2A+8     h 4
+    //     track groove srcY 2A+12    h 4   (tiled; page-up + page-down regions)
+    //     down arrow   srcY 2A+16    h A   (pressed: srcY 3A+16)
+    // arrow_extent() recomputes A from the loaded sprite so the rects stay
+    // correct even if the sheet is ever a different height.
+    static constexpr int kScrollW        = 16;   // W (vscr column width)
+    static constexpr int kThumbMinH      = 8;
+    static constexpr int kSliceH         = 4;
+    static constexpr int kArrowFallbackH = 16;   // no-skin fallback only
 
     // ---------------------------------------------------------------------------
     // State
@@ -172,12 +204,16 @@ private:
     int  row_screen_y(int i) const noexcept;
     void switch_tab(int tab);
 
+    // Arrow button height = engine metric A = (vscr_h - 16) / 4 (0x572d80).
+    // 26 for the stock 120px sheet; kArrowFallbackH when no skin is loaded.
+    int  arrow_extent() const noexcept;
+
     bool scrollbar_geom(Rect& up, Rect& down, Rect& track, Rect& thumb) const;
 
     void render_scrollbar(SDL_Renderer* r) const;
     void render_list(SDL_Renderer* r, Font* font) const;
     void render_preview(SDL_Renderer* r) const;
-    void render_info(SDL_Renderer* r, Font* font) const;
+    void render_info(SDL_Renderer* r, Font* name_font, Font* body_font) const;
     void render_bottom_buttons(SDL_Renderer* r, Font* font) const;
 
     static void blit_skin(SDL_Renderer* r, const SkinSprite& s, int ox, int oy,

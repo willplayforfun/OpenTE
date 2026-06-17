@@ -3,6 +3,8 @@
 #include <SDL_image.h>
 #include <SDL_log.h>
 
+#include <cmath>
+#include <cstring>
 #include <fstream>
 
 #include <nlohmann/json.hpp>
@@ -179,5 +181,96 @@ int BitmapFont::measure_text(const char* text) const {
     }
     return w;
 }
+
+// ---------------------------------------------------------------------------
+// Rich-text rendering (<b> bold, <o> outline)
+// ---------------------------------------------------------------------------
+
+void BitmapFont::draw_rich_text(SDL_Renderer* renderer,
+                                 const char* text,
+                                 int x, int baseline_y,
+                                 SDL_Color color) const {
+    if (!atlas_ || !text) return;
+
+    bool bold = false, outline = false;
+    const char* p = text;
+
+    while (*p) {
+        if (*p == '<') {
+            if (strncmp(p, "<b>",  3) == 0) { bold = true;    p += 3; continue; }
+            if (strncmp(p, "</b>", 4) == 0) { bold = false;   p += 4; continue; }
+            if (strncmp(p, "<o>",  3) == 0) { outline = true; p += 3; continue; }
+            if (strncmp(p, "</o>", 4) == 0) { outline = false; p += 4; continue; }
+        }
+
+        const uint32_t cp = next_codepoint(p);
+        if (cp == 0) break;
+
+        const int gi = codepoint_to_glyph(cp);
+        const GlyphInfo& g = glyphs_[gi];
+        if (g.ink_h <= 0 || g.slot_w <= 0) { x += g.advance; continue; }
+
+        const SDL_Rect src{g.atlas_x, g.atlas_y, g.slot_w, g.ink_h};
+
+        if (outline) {
+            constexpr SDL_Color kOutline{0, 0, 0, 220};
+            SDL_SetTextureColorMod(atlas_, kOutline.r, kOutline.g, kOutline.b);
+            SDL_SetTextureAlphaMod(atlas_, kOutline.a);
+            for (int oy = -1; oy <= 1; ++oy) {
+                for (int ox = -1; ox <= 1; ++ox) {
+                    if (ox == 0 && oy == 0) continue;
+                    const SDL_Rect dst{x + ox, baseline_y + g.y_off + oy, g.slot_w, g.ink_h};
+                    SDL_RenderCopy(renderer, atlas_, &src, &dst);
+                }
+            }
+            SDL_SetTextureColorMod(atlas_, color.r, color.g, color.b);
+            SDL_SetTextureAlphaMod(atlas_, color.a);
+            { const SDL_Rect dst{x, baseline_y + g.y_off, g.slot_w, g.ink_h};
+              SDL_RenderCopy(renderer, atlas_, &src, &dst); }
+        } else if (bold) {
+            SDL_SetTextureColorMod(atlas_, color.r, color.g, color.b);
+            SDL_SetTextureAlphaMod(atlas_, color.a);
+            { const SDL_Rect dst{x, baseline_y + g.y_off, g.slot_w, g.ink_h};
+              SDL_RenderCopy(renderer, atlas_, &src, &dst); }
+            { const SDL_Rect dst{x + 1, baseline_y + g.y_off, g.slot_w, g.ink_h};
+              SDL_RenderCopy(renderer, atlas_, &src, &dst); }
+        } else {
+            SDL_SetTextureColorMod(atlas_, color.r, color.g, color.b);
+            SDL_SetTextureAlphaMod(atlas_, color.a);
+            { const SDL_Rect dst{x, baseline_y + g.y_off, g.slot_w, g.ink_h};
+              SDL_RenderCopy(renderer, atlas_, &src, &dst); }
+        }
+
+        x += g.advance;
+    }
+}
+
+void BitmapFont::draw_rich_text_shadowed(SDL_Renderer* renderer,
+                                          const char* text,
+                                          int x, int baseline_y,
+                                          SDL_Color color,
+                                          SDL_Color shadow,
+                                          int dx, int dy) const {
+    draw_rich_text(renderer, text, x + dx, baseline_y + dy, shadow);
+    draw_rich_text(renderer, text, x, baseline_y, color);
+}
+
+int BitmapFont::measure_rich_text(const char* text) const {
+    int w = 0;
+    const char* p = text;
+    while (*p) {
+        if (*p == '<') {
+            if (strncmp(p, "<b>",  3) == 0) { p += 3; continue; }
+            if (strncmp(p, "</b>", 4) == 0) { p += 4; continue; }
+            if (strncmp(p, "<o>",  3) == 0) { p += 3; continue; }
+            if (strncmp(p, "</o>", 4) == 0) { p += 4; continue; }
+        }
+        const uint32_t cp = next_codepoint(p);
+        if (cp == 0) break;
+        w += glyphs_[codepoint_to_glyph(cp)].advance;
+    }
+    return w;
+}
+
 
 }  // namespace opente::render
