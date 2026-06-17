@@ -31,34 +31,37 @@ from ..containers.container import DirNode, find_child
 from ..containers.record import Field, parse_record
 
 # The clone's own small terrain-type enum (world-and-maps.md). Index into
-# this list is the byte stored in `terrain.data`.
+# this list is the byte stored in `terrain.data`.  Must stay in sync with
+# world/region.h's TerrainType enum.
 _TERRAIN_TYPES = [
     "deep_water",
-    "shallow_water",
-    "plains",
-    "hills",
-    "mountains",
-    "desert",
-    "forest",
+    "shallow_water",  # reserved -- not yet emitted (band->type mapping unresolved, spec-deviations #8)
+    "buildable",
+    "impassable",
 ]
 
 # Coarse mapping from `mapp.terr` raw byte value to an index into
 # `_TERRAIN_TYPES`, based on the band boundaries observed on `ep01 China`
 # (2, 4-8, 33-40, 64-70, 96-102) -- see module docstring.
+# `mapp.terr` bytes pack (high_nibble=terrain_band, low_nibble=texture_page);
+# four high-nibble values appear: 0 (water band), 2, 4, 6 (land bands).
 _DEEP_WATER = _TERRAIN_TYPES.index("deep_water")
-_PLAINS = _TERRAIN_TYPES.index("plains")
-_HILLS = _TERRAIN_TYPES.index("hills")
-_MOUNTAINS = _TERRAIN_TYPES.index("mountains")
+_BUILDABLE = _TERRAIN_TYPES.index("buildable")
+_IMPASSABLE = _TERRAIN_TYPES.index("impassable")
 
 
 def _terrain_type_for_band(value: int) -> int:
-    if value <= 2:
+    # Threshold <=15 captures the entire first band (high_nibble==0, values
+    # 2-8 in practice).  The previous threshold of <=2 incorrectly mapped
+    # values 3-8 (still part of the water band) to buildable land.
+    if value <= 15:
         return _DEEP_WATER
-    if value <= 31:
-        return _PLAINS
-    if value <= 63:
-        return _HILLS
-    return _MOUNTAINS
+    # Bands 33-40 (high_nibble=2) and 64-70 (high_nibble=4) are buildable land.
+    if value <= 95:
+        return _BUILDABLE
+    # Band 96-102 (high_nibble=6) is the highest terrain; treated as impassable
+    # pending RE confirmation of the band->gameplay-category mapping.
+    return _IMPASSABLE
 
 
 def _encode_terrain_rle(terrain_types: bytes) -> str:

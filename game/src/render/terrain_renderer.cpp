@@ -438,7 +438,7 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
     };
 
     // Shore overlays only appear on land tiles, not water.
-    if (region_->terrain_at(tx, ty) < world::TerrainType::Mountains) {
+    if (region_->terrain_at(tx, ty) < world::TerrainType::Buildable) {
         return;
     }
 

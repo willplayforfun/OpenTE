@@ -12,17 +12,17 @@
 
 namespace opente::world {
 
-/// Small terrain-type enum (world-and-maps.md). 
+/// Small terrain-type enum (world-and-maps.md).
 /// Values are the bytes stored in `terrain.data` after RLE decoding -- see
 /// `tools/extractor/maps/region.py`'s `_TERRAIN_TYPES` (must stay in sync).
+///
+/// ShallowWater is reserved; the band->type mapping for it is unresolved
+/// (spec-deviations.md #8) and the extractor does not emit it yet.
 enum class TerrainType : std::uint8_t {
-    DeepWater = 0,
-    ShallowWater = 1,
-    Plains = 2,
-    Hills = 3,
-    Mountains = 4,
-    Desert = 5,
-    Forest = 6,
+    DeepWater    = 0,
+    ShallowWater = 1,  // reserved -- not yet emitted by the extractor
+    Buildable    = 2,
+    Impassable   = 3,
 };
 
 class Region {
