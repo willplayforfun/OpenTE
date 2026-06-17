@@ -4,11 +4,13 @@ This document specifies the clone's UI: widget framework, HUD, and the
 core dialogs (market, build menu, building info). The original implements
 roughly one C++ class per dialog (`T*Window` classes from the RTTI
 inventory) backed by large UI resource containers (`a_ui`/`d_ui`/`m_ui`)
-whose pixel-level layout wasn't decoded. The clone does **not** attempt to
-replicate the original's pixel-exact UI — it specifies a small, modern,
-data-driven widget framework and the *set of screens* a playable clone
-needs, informed by what data the original exposes (market prices, building
-status, build menus) rather than its exact chrome.
+whose pixel-level layout has been **partially** reverse-engineered. The
+HUD bars (top bar `bart`, bottom toolbar `barb`, map viewport) have been
+decoded to pixel-exact coordinates — see `documentation/toolbar-re.md`.
+The clone uses those exact rects for the always-visible chrome; for dialog
+panels, it specifies a small, modern widget framework informed by what data
+the original exposes (market prices, building status, build menus) rather
+than their exact pixel chrome.
 
 ## Widget framework
 
@@ -48,11 +50,18 @@ public:
 
 - **Screen-space only**: UI widgets render in screen space (not affected by
   camera pan/zoom), per [rendering.md](rendering.md).
-- **Text rendering**: use `SDL_ttf` (add to `vcpkg.json`) with a bundled
-  open-license font for UI text — the original's custom bitmap font format
-  (`Data/font.{}`) is not worth reverse-engineering
-  for the clone; a real font renderer is strictly better (scalable,
-  localizable, no glyph-atlas decoding needed).
+- **Text rendering** (SUPERSEDES the original "use SDL_ttf" plan): the clone
+  renders the original's **own bitmap fonts**, extracted from `Data/font.{}`
+  to glyph atlases (`game_data/fonts/<face>_<pt>pt.{png,json}`) and drawn via
+  `render::BitmapFont` / `render::FontCache` (`fonts.get("seri", 11)`). Four
+  faces: `clea` (mixed-case), `seri`/`sans` (**small-caps faces** — lowercase
+  codepoints are small-capital glyphs), `cour` (mono). This was chosen over
+  `SDL_ttf` because the small-caps look and exact metrics are integral to the
+  original's appearance and come *for free* from the real glyphs — there is no
+  runtime case/scale transform. UI strings come from the extracted `strings`
+  table (`Data/text.{}` → `DataRegistry::text("cons.labl.titl", fallback)`),
+  with `[N …]` placeholder substitution. See `documentation/cons-panel-re.md`
+  (fonts/small-caps), `documentation/04-other-formats.md` (`text.{}` strings).
 - **Sprite-skinning** (buttons, panel backgrounds, icons): drawn via
   `Image` widgets referencing `SpriteAtlas` entries from extracted UI
   sprite sheets (`a_ui`/`d_ui`/`m_ui` — **extraction itself is done**, see
@@ -128,16 +137,63 @@ framework (so it can use `SDL_ttf` + the bundled font and the real
 
 ## HUD (always visible)
 
-- **Treasury display**: current player's coin balance (top of screen).
-- **Date/clock**: current in-game date, derived from `tick` and a
-  config-defined ticks-per-day (ties into [simulation.md](simulation.md)'s
-  "period" length).
-- **Minimap**: small top-down render of `terrain.data` +
-  building/merchant positions, click-to-recenter camera. Can be a simple
-  software-rendered texture updated periodically (every N ticks), not every
-  frame.
-- **Build menu toggle** and **selected-entity info panel** (bottom of
-  screen, shows details for the currently-selected building/merchant).
+**Pixel-exact layout is now fully RE'd — see `documentation/toolbar-re.md`.**
+
+Screen is 1024×768. The fixed HUD occupies the top 20px and bottom 55px,
+leaving a 951×681 map viewport at (10, 24).
+
+### Top bar `bart` — (0, 0, 1024, 20), sprite `tool.topb`
+
+Sub-views within the top bar (coords relative to bar's top-left):
+
+| x, y | w, h | Content |
+|------|------|---------|
+| 8, 2 | 129, 18 | Text: treasury / player gold |
+| 146, 1 | 22, 18 | `spee` small button (speed –) |
+| 173, 1 | 161, 20 | `spee` speed display/selector |
+| 429, 1 | 22, 18 | `rena` small button (confirm name?) |
+| 458, 1 | 185, 20 | `rena` player name display / editable field |
+| 760, 2 | 110, 18 | Text: in-game date / era |
+| 884, 2 | 100, 18 | Text: score / ranking |
+| 986, 3 | 12, 12 | Small button: options / game menu |
+
+### Bottom toolbar `barb` — (0, 713, 1024, 55), sprite `tool.botb`
+
+`tool.botb` (1024×54) is the bottom bar background — a plain stone bar with
+**no button icons baked in**.  All 8 mode button sprites are rendered
+dynamically every frame: frame 1 (right half) = unselected, frame 0 (left
+half) = selected/active.  This is confirmed by the SetSprite call at
+`0x53e51d` in the TSilkRoadView constructor and the per-button frame fields
+`[sub+0x6c]=2` (frame count) and `[sub+0x70]=1` (initial frame = unselected).
+
+Mode button positions within barb (left group y=14, right group y=12):
+
+Each button has `frame_count=2`, `initial_frame=1` (right half = unselected).
+On selection, render frame 0 (left half). Frame width = sprite_width / 2.
+
+| Tag  | x, y (in barb) | w, h | Sprite | Frame 0 (selected) | Frame 1 (default) |
+|------|----------------|------|--------|--------------------|--------------------|
+| play | 28, 14 | 35, 33 | tool.play 70×33 | left 35px | right 35px |
+| rout | 84, 14 | 35, 33 | tool.rout 70×33 | left 35px | right 35px |
+| cons | 141, 14 | 35, 33 | tool.cons 70×33 | left 35px | right 35px |
+| tech | 197, 14 | 35, 33 | tool.tech 70×33 | left 35px | right 35px |
+| terr | 765, 12 | 35, 33 | tool.terr 70×33 | left 35px | right 35px |
+| regi | 816, 12 | 36, 33 | tool.regi 72×33 | left 36px | right 36px |
+| worl | 866, 12 | 35, 33 | tool.wmap 70×33 | left 35px | right 35px |
+| game | 966, 12 | 35, 33 | tool.game 70×33 | left 35px | right 35px |
+
+Center band (`hot1`/`hot2`/`hot3`): the **mode-button tooltip area**. Hovering
+a button shows its name in `hot1` (287,12,450,14) and, for the 5 toggle/control
+buttons, a `"Click to …"` description in `hot2` (287,26,450,14); the 3 map
+buttons show the name only (single line, `hot3` 271,12,482,29). The strings are
+EXE defaults loaded by the original via the `.ini` layout system — NOT the
+`text.{}` `strings` table. See `documentation/toolbar-re.md` "Toolbar tooltips"
+for the verbatim per-button strings; implemented in `game/src/ui/hud.cpp`.
+
+### Map viewport
+
+Rect: (10, 24, 951, 681) — not full-width; 10px left margin, 63px right gap
+(for the side panel / construction panel when open).
 
 ## Dialogs
 
@@ -150,6 +206,15 @@ framework (so it can use `SDL_ttf` + the bundled font and the real
   (see [input.md](input.md)).
 - Disabled (grayed) entries show a tooltip with the unlock requirement
   (e.g. "Requires: <tech name>").
+- **Fonts / labels (RE-exact, `documentation/cons-panel-re.md`)**: title +
+  categories + name + conf/cancel labels = `seri`; list rows + description body
+  = `sans` (both small-caps faces). All label text is the verbatim
+  `cons.labl.*` string from the `strings` table — never uppercased/transformed.
+  Full-caps headers (e.g. `MARKETS`, `C O N S T R U C T I O N`) are full caps
+  because the *source string* is; the cancel button + building names are mixed
+  case → render as small caps. List rows use the `stdc.sele` highlight
+  (194×17), not the wider `cons.sele` category bar. Implemented in
+  `game/src/ui/build_menu.cpp`.
 
 ### Market window
 
@@ -208,6 +273,7 @@ duration_ms)`, rendered as a fading label stack in a corner of the screen.
   RE). Until wired up, the clone's UI uses placeholder flat colors +
   `SDL_ttf` text; `Image` widgets already take a `SpriteAtlas` reference so
   swapping in real sprites doesn't change widget logic.
-- **Original bitmap font format** (`Data/font.{}`): not decoded, and the
-  clone deliberately doesn't need it (uses `SDL_ttf` instead) — listed here
-  only so it's not mistaken for a blocking gap.
+- ~~**Original bitmap font format** (`Data/font.{}`)~~ **DECODED & USED**: the
+  glyph-atlas format is reverse-engineered and the clone renders the real
+  fonts (see the "Text rendering" bullet above and `cons-panel-re.md`). The
+  earlier "use SDL_ttf, don't RE the font" plan is superseded.

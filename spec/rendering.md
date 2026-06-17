@@ -180,9 +180,22 @@ and `color.a` differ per pass):
   passes. `terrain_blending_enabled_`/`shore_overlays_enabled_` independently
   gate the B/C passes. None of the three are exposed in UI yet (code-level
   only).
-- **Decals**: not implemented — out of scope for this plan (see
-  `terrain-blending-plan.md` Stage D, deferred indefinitely pending Stage 3
-  pathway rendering).
+- **Network decals (Stage D)**: trail/road/canal/rail overlays, drawn after
+  shore overlays for every tile whose `TileConnectivity` mask is non-zero.
+  Uses three 256-entry runtime LUTs (`kTrailLUT` / `kCanalLUT` / `kRailLUT`,
+  decoded from `.rdata` seeds in `terrain_renderer.cpp`) and the same 53-cell
+  `kShoreUvIndex` + diamond-quad UV machinery as shore overlays.  Priority:
+  rail wins → canal wins → trail/road.  Trail/road are split across two atlas
+  pages (`terrain.<culture>.trail1` / `trail2`); canal uses one
+  (`terrain.<culture>.canal`); rail uses one (`terrain.<culture>.rail`).  The
+  per-tile `TileConnectivity` struct (6 bytes: `road`, `trail_extra`,
+  `canal_dir`, `rail`, `canal`, `reserved`) lives in `world::Region::connectivity_`
+  and is zero-initialized at load time (no authored connectivity in base map
+  files). **Implemented** in `terrain_renderer.{h,cpp}` (`render_network_decal`
+  / `draw_network_conn`) and `terrain_tileset.{h,cpp}` (`network(layer)`
+  accessor). Network atlas extraction is in
+  `OpenTE/tools/extractor/sprites/terrain.py` (`_NETWORK_ATLAS_SUBTAGS`).
+  See `documentation/extracted/exe_trail_re_findings.md` for full RE detail.
 
 A detailed, staged implementation plan — including the per-tile
 texture-page data model, palette/atlas extraction, and open
@@ -300,13 +313,22 @@ highlight-overlay layer (above buildings, below UI):
   matches genre expectations and is what the original's UI text implies
   even where the exact RE'd color for "invalid" wasn't found).
 - **Invalid placement tile**: red/orange, semi-transparent.
-- **Pathway drag preview**: same convention, one quad per tile along the
-  computed/previewed path.
+- **Pathway drag preview**: render the actual trail/road/canal/rail atlas
+  sprites (not colored quads) by calling `TerrainRenderer::render_preview_path(
+  waypoints, cursor_tx, cursor_ty, path_type, camera)` after the main
+  `render()` call. The method rasterizes waypoint segments internally (8-connected
+  greedy diagonal) and builds a temporary `TileConnectivity` map in memory,
+  then calls `draw_network_conn()` per tile — no Region mutation, no set/clear
+  dance. Small semi-transparent colored overlays remain for waypoint markers
+  (yellow dots showing clicked joints) and the live cursor tile (orange);
+  these still go through the `AreaOverlayRenderer`.
 
 Implementation: draw a flat-shaded isometric diamond (`TILE_W x TILE_H`)
 at each highlighted tile's screen position with `SDL_SetRenderDrawBlendMode(
 SDL_BLENDMODE_BLEND)` and the appropriate RGBA color — no need for a sprite
-asset, a procedural quad is simpler and trivially recolorable.
+asset, a procedural quad is simpler and trivially recolorable. (This
+applies to building placement highlights; pathway previews use real network
+decal sprites as described above.)
 
 ## UI rendering
 

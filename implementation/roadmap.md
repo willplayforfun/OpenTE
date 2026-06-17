@@ -93,6 +93,11 @@ buildings rendered isometrically, pan/zoom around it.
   ([rendering.md](../spec/rendering.md)).
 - Implement a minimal build menu ([ui.md](../spec/ui.md)) listing all
   buildings from `buildings.json` (no tech-gating yet — that's Stage 5).
+  *(Done, and since taken to RE-exact fidelity: skin sprites + pixel-exact
+  rects, the real `seri`/`sans` small-caps fonts, labels from the `strings`
+  table (`cons.labl.*`), `stdc.sele` 194×17 list rows. See `build_menu.cpp` and
+  `documentation/cons-panel-re.md`. The HUD toolbar's two-line button tooltips
+  are likewise wired from the original strings — `hud.cpp`, `toolbar-re.md`.)*
 - Placing a building spawns a static entity (no production/AI yet) and
   deducts a flat placeholder cost from a placeholder treasury value.
 
@@ -195,13 +200,13 @@ delete them — git history retains the record).
 | Terrain band -> terrain-type mapping is coarse/approximate | Stage 1 | [world-and-maps.md](../spec/world-and-maps.md) Open questions |
 | Terrain-buildability check stubbed to "non-water" (real rule decoded, not yet wired in) | Stage 2 | [input.md](../spec/input.md) Open questions |
 | Flat placeholder building/pathway costs, no real treasury rules | Stage 2-3 | [simulation.md](../spec/simulation.md) |
-| Road/trail tiles use flat debug overlay, not real connection-sprite variants | Stage 3 | [rendering.md](../spec/rendering.md) |
+| ~~Road/trail tiles use flat debug overlay, not real connection-sprite variants~~ **RESOLVED** — Stage D network decal pass fully implemented: `TileConnectivity` struct, three LUT arrays (`kTrailLUT`/`kCanalLUT`/`kRailLUT`), per-culture network atlases (`terrain.<c>.trail1`/`trail2`/`canal`/`rail`) extracted and loaded, `render_network_decal()` / `draw_network_conn()` in `terrain_renderer.cpp`. Construction-mode preview uses `render_preview_path()` (rasterizes segments on-the-fly, no Region mutation). | Stage 3 | [rendering.md](../spec/rendering.md) |
 | Economy tuning constants (`PSCA` etc.) are first-guess values | Stage 4 | `tuning-log.md` (create when Stage 4 starts) |
 | Merchant orders issued manually, no AI | Stage 5 | [opponent-ai.md](../spec/opponent-ai.md) |
 | Starting buildings/resources/merchants for a region: extract real `enti` table from a matching save where available; otherwise scatter `bres` per `epis.<ep>.regi.<id>.grou` quotas on non-water tiles | Stage 1 | RE episode population (`documentation/00-roadmap.md` §10, in progress) |
 | UI is flat-color placeholders; UI sprites (`a_ui`/`d_ui`/`m_ui`) are extracted but not wired into widgets | All UI stages | [ui.md](../spec/ui.md) Open questions (extraction done, wiring pending) |
 | Single-region only | Stages 1-7 | Stage 8 |
-| Shore-overlay UV mapping (`kShoreUvIndex` cell -> diamond-quad UV rect) is a documented square-to-diamond approximation pending visual validation against the original; edge-blend (`tran` atlas, Stage B) per-direction corner rotation (`kEdgeBlendK`) is now derived from `0x42acf0`'s disassembly but the vertex-to-screen-corner and array-slot-to-direction conventions are assumed, not confirmed -- pending visual validation, and only the `ep01_china`/`chi1` `tran` atlas is extracted (other palettes' `tran`/`tr14`/`tr15`/`tr17` not yet per-episode); "decal" pass (Stage D) deferred indefinitely pending Stage 3 pathway rendering | Stage 1 (terrain-blending-plan.md Stages A-C/E done) | [rendering.md](../spec/rendering.md#texture-edge-blending-and-shore-overlays), [terrain-blending-plan.md](terrain-blending-plan.md) |
+| Shore-overlay UV mapping (`kShoreUvIndex` cell -> diamond-quad UV rect) is a documented square-to-diamond approximation pending visual validation against the original; edge-blend (`tran` atlas, Stage B) per-direction corner rotation (`kEdgeBlendK`) is now derived from `0x42acf0`'s disassembly but the vertex-to-screen-corner and array-slot-to-direction conventions are assumed, not confirmed -- pending visual validation, and only the `ep01_china`/`chi1` `tran` atlas is extracted (other palettes' `tran`/`tr14`/`tr15`/`tr17` not yet per-episode); ~~"decal" pass (Stage D) deferred indefinitely pending Stage 3 pathway rendering~~ **Stage D DONE** (see row above) | Stage 1 (terrain-blending-plan.md Stages A-C/D/E done) | [rendering.md](../spec/rendering.md#texture-edge-blending-and-shore-overlays), [terrain-blending-plan.md](terrain-blending-plan.md) |
 
 **Note (2026-06-11):** Stage 1's map extraction and Stage 4's
 economy/production placeholders can now use real decoded data instead of
