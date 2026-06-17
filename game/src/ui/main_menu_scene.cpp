@@ -8,14 +8,13 @@ namespace opente::ui {
 
 // Normal text: 0x002fbdfc COLORREF (BBGGRR) → R=0xfc G=0xbd B=0x2f (golden amber).
 static constexpr SDL_Color kGold   = {252, 189,  47, 255};
-// Hover/pressed text: plain white (confirmed from original behavior).
+// Hover/pressed text: plain white.
 static constexpr SDL_Color kWhite  = {255, 255, 255, 255};
 // Greyed-out for disabled buttons.
 static constexpr SDL_Color kDim    = {100,  75,  19, 160};
-// Drop shadow behind all button text (matches original 1px shadow pass).
+// Drop shadow behind all button text.
 static constexpr SDL_Color kShadow = {  0,   0,   0, 255};
 
-// Button layout confirmed from TMainStartupScreen ctor disassembly.
 // See documentation/main-menu-re.md "Widget rectangles".
 const MainMenuScene::Button MainMenuScene::kButtons[] = {
     // id      rect                    label           pt  enabled
@@ -121,8 +120,7 @@ void MainMenuScene::render_buttons() {
         int baseline_y = btn.rect.y +
             (btn.rect.h + font->ascender() - font->descender()) / 2;
 
-        // On press: shift +1 right +1 down (confirmed: push 1; push 1; call
-        // 0x430e60 in TMainStartupScreenController::Init for every button).
+        // On press: shift +1 right +1 down
         if (is_pressed) {
             text_x     += 1;
             baseline_y += 1;

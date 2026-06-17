@@ -15,7 +15,7 @@ namespace {
 constexpr int         kWindowWidth  = 1024;
 constexpr int         kWindowHeight = 768;
 constexpr const char* kWindowTitle  = "OpenTE";
-constexpr const char* kStartMapId   = "ep01_chin";
+constexpr const char* kStartEpisodeId = "ep01";
 }  // namespace
 
 bool App::init(const std::filesystem::path& executable_path) {
@@ -107,7 +107,7 @@ int App::run() {
         if (main_menu_ && main_menu_->wants_start_game()) {
             main_menu_ = nullptr;
             auto gp = std::make_unique<gameplay::GameplayScene>(
-                window_, renderer_, *registry_, kStartMapId);
+                window_, renderer_, *registry_, kStartEpisodeId);
             gameplay_scene_ = gp.get();
             scene_manager_.set_scene(std::move(gp));
         }

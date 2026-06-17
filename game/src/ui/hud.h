@@ -12,8 +12,7 @@ namespace opente::data { class DataRegistry; }
 
 namespace opente::ui {
 
-/// Always-visible HUD chrome: the top info bar (`bart`) and the bottom toolbar
-/// (`barb`), rendered from the original game's own sprites.
+/// Always-visible HUD chrome: the top info bar and the bottom toolbar.
 ///
 /// Every rect below is taken verbatim from the disassembly of the layout
 /// constructor `TSilkRoadView` @ 0x53e120 / 0x53e330 — see

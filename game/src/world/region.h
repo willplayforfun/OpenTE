@@ -1,7 +1,7 @@
 #pragma once
 
-// A loaded `game_data/maps/<id>.json` -- terrain grid plus static
-// decorations/cities/regions. See OpenTE/spec/world-and-maps.md "Map data".
+// A loaded `game_data/maps/<id>.json` -- terrain grid plus static decorations/cities/regions. 
+// See OpenTE/spec/world-and-maps.md "Map data".
 
 #include <cstdint>
 #include <filesystem>
@@ -12,8 +12,8 @@
 
 namespace opente::world {
 
-/// The clone's own small terrain-type enum (world-and-maps.md). Values are
-/// the bytes stored in `terrain.data` after RLE decoding -- see
+/// Small terrain-type enum (world-and-maps.md). 
+/// Values are the bytes stored in `terrain.data` after RLE decoding -- see
 /// `tools/extractor/maps/region.py`'s `_TERRAIN_TYPES` (must stay in sync).
 enum class TerrainType : std::uint8_t {
     DeepWater = 0,
@@ -37,27 +37,19 @@ public:
     int width() const { return width_; }
     int height() const { return height_; }
 
-    /// Returns the terrain type at tile `(tx, ty)`. `tx`/`ty` must be in
-    /// `[0, width)` / `[0, height)`.
+    /// Returns the terrain type at tile `(tx, ty)`. `tx`/`ty` must be in `[0, width)` / `[0, height)`.
     TerrainType terrain_at(int tx, int ty) const { return terrain_[static_cast<std::size_t>(ty) * width_ + tx]; }
 
-    /// Returns the raw `mapp.alti` byte at tile `(tx, ty)` (`tx`/`ty` must be
-    /// in `[0, width)` / `[0, height)`). Convert to world height units via
-    /// `alti_byte * 10.0 / 256.0` (see `documentation/08-investigation-needed.md`
-    /// B15) -- the renderer instead uses `render::kPixelsPerAltiUnit` to go
-    /// straight from this byte to a screen-pixel offset.
+    /// Returns the raw `mapp.alti` byte at tile `(tx, ty)` (`tx`/`ty` must be in `[0, width)` / `[0, height)`). 
+    /// Can be converted to world height units -- the renderer instead uses `render::kPixelsPerAltiUnit` to go straight from this byte to a screen-pixel offset.
     std::uint8_t height_at(int tx, int ty) const { return heightmap_[static_cast<std::size_t>(ty) * width_ + tx]; }
 
-    /// The map's "sea level" `alti` value, used as the fixed height for water
-    /// tiles -- per B15, this is best derived per-map as the heightmap's own
-    /// minimum rather than from a `terrain_at` band.
+    /// The map's base `alti` value, used to position the starry backdrop and build the edge skirt.
     std::uint8_t sea_level() const { return sea_level_; }
 
-    /// Returns the texture-page index (1-13) at tile `(tx, ty)`, indexing
-    /// into `tables/terrain_textures.json` (terrain-blending-plan.md Stage
-    /// A.1, from `mapp.terr & 0xf`). `tx`/`ty` must be in `[0, width)` /
-    /// `[0, height)`. Maps with no `texture_index` field default to 1
-    /// everywhere.
+    /// Returns the texture-page index (1-13) at tile `(tx, ty)`, indexing into `tables/terrain_textures.json`.
+    /// `tx`/`ty` must be in `[0, width)` / `[0, height)`. 
+    /// Maps with no `texture_index` field default to 1 everywhere.
     std::uint8_t texture_index_at(int tx, int ty) const {
         return texture_index_[static_cast<std::size_t>(ty) * width_ + tx];
     }

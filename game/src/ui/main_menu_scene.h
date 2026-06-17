@@ -11,11 +11,7 @@ namespace opente::ui {
 
 /// Main startup screen — the first thing shown when the game launches.
 ///
-/// Renders the full-screen background (lbak) and the text menu buttons (game,
-/// load, tuto, quit, save, resu, cred, high, opts). On hover the text turns
-/// white; on press the text shifts +1px right +1px down (from EXE disasm).
-/// Button positions and fonts are from the
-/// original TMainStartupScreen layout (documentation/main-menu-re.md).
+/// Renders the full-screen background and the text menu buttons.
 ///
 /// Uses SDL_RenderSetLogicalSize(1024, 768) so all coordinates match the
 /// original game's 1024×768 virtual canvas. The logical size is restored to

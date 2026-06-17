@@ -1,9 +1,10 @@
 #pragma once
 
-// World: owns the loaded map region(s) for the running game.
+// World: owns all map regions for the running episode.
 // See OpenTE/spec/world-and-maps.md.
 
 #include <string>
+#include <vector>
 
 #include "data/registry.h"
 #include "world/region.h"
@@ -12,15 +13,18 @@ namespace opente::world {
 
 class World {
 public:
-    /// Loads the map listed in `registry`'s manifest under `map_id` (e.g.
-    /// "ep01_chin"). Throws `data::DataError` if `map_id` isn't in the
-    /// manifest, or `std::runtime_error` if the map file can't be parsed.
-    static World load(const data::DataRegistry& registry, const std::string& map_id);
+    /// Loads all map regions listed for `episode_id` in the registry.
+    /// Throws `data::DataError` if the episode is unknown or any region map
+    /// isn't found in the manifest.
+    static World load_episode(const data::DataRegistry& registry,
+                              const std::string& episode_id);
 
-    const Region& region() const { return region_; }
+    int region_count() const { return static_cast<int>(regions_.size()); }
+    const Region& region(int index) const { return regions_[index]; }
+    const std::vector<Region>& regions() const { return regions_; }
 
 private:
-    Region region_;
+    std::vector<Region> regions_;
 };
 
 }  // namespace opente::world

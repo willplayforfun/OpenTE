@@ -37,7 +37,7 @@ constexpr const char* kConsSpriteIds[] = {
 GameplayScene::GameplayScene(SDL_Window* window,
                              SDL_Renderer* renderer,
                              const data::DataRegistry& registry,
-                             const std::string& map_id)
+                             const std::string& episode_id)
     : window_(window), renderer_(renderer), registry_(&registry)
 {
     load_sprites();
@@ -90,48 +90,65 @@ GameplayScene::GameplayScene(SDL_Window* window,
         render::kPixelsPerWorldHeightUnit,
     };
 
-    load_map(map_id);
+    load_episode(episode_id);
 }
 
-void GameplayScene::load_map(const std::string& map_id) {
-    // Tear down current map state (releases GPU textures before reallocating).
-    if (terrain_renderer_) terrain_renderer_->set_tileset(nullptr);
-    terrain_renderer_.reset();
-    terrain_tileset_.reset();
+void GameplayScene::load_episode(const std::string& episode_id) {
+    // Tear down previous episode state (release GPU resources before reallocating).
+    for (auto& tr : terrain_renderers_) tr->set_tileset(nullptr);
+    terrain_renderers_.clear();
+    terrain_tilesets_.clear();
     world_.reset();
     hq_sprite_ = {};
 
     try {
-        world_ = world::World::load(*registry_, map_id);
+        world_ = std::make_unique<world::World>(
+            world::World::load_episode(*registry_, episode_id));
     } catch (const std::exception& e) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "GameplayScene: failed to load map '%s': %s",
-                     map_id.c_str(), e.what());
+                     "GameplayScene: failed to load episode '%s': %s",
+                     episode_id.c_str(), e.what());
         return;
     }
 
-    current_map_id_ = map_id;
+    current_episode_id_ = episode_id;
 
-    // Update selected_map_index_ to match the loaded map for the dev GUI listbox.
-    const auto& maps = registry_->manifest().maps;
-    for (int i = 0; i < static_cast<int>(maps.size()); ++i) {
-        if (maps[i].id == map_id) { selected_map_index_ = i; break; }
+    // Build one tileset + renderer per region. unique_ptr ownership ensures
+    // the TerrainTileset addresses are stable even if the vectors resize.
+    for (int i = 0; i < world_->region_count(); ++i) {
+        const world::Region& reg = world_->region(i);
+        terrain_tilesets_.push_back(std::make_unique<render::TerrainTileset>(
+            render::TerrainTileset::load(renderer_, registry_->game_data_dir(),
+                                         *registry_, reg.culture_set())));
+        terrain_renderers_.push_back(
+            std::make_unique<render::TerrainRenderer>(renderer_, reg));
+        terrain_renderers_.back()->set_tileset(terrain_tilesets_.back().get());
     }
 
-    const std::string& culture = world_->region().culture_set();
+    // Sync the dev GUI episode listbox selection.
+    int idx = 0;
+    for (const auto& [ep_id, _] : registry_->episodes()) {
+        if (ep_id == episode_id) { selected_episode_index_ = idx; break; }
+        ++idx;
+    }
 
-    std::cout << "Loaded map '" << world_->region().name()
-              << "' (culture: " << (culture.empty() ? "unknown" : culture)
-              << ", " << world_->region().width() << "x" << world_->region().height() << ")\n";
+    activate_region(0);
+}
 
-    if (hud_ptr_) hud_ptr_->set_region_name(world_->region().name());
+void GameplayScene::activate_region(int index) {
+    active_region_index_ = index;
+    const world::Region& reg = world_->region(index);
 
-    terrain_renderer_.emplace(renderer_, world_->region());
-    terrain_tileset_ = render::TerrainTileset::load(
-        renderer_, registry_->game_data_dir(), *registry_, culture);
-    terrain_renderer_->set_tileset(&terrain_tileset_.value());
+    const std::string& culture = reg.culture_set();
+    std::cout << "Active region '" << reg.name()
+              << "' (episode: " << current_episode_id_
+              << ", culture: " << (culture.empty() ? "unknown" : culture)
+              << ", " << reg.width() << "x" << reg.height() << ")\n";
 
-    // Load the HQ building sprite for this culture.
+    if (hud_ptr_) hud_ptr_->set_region_name(reg.name());
+
+    // Load the HQ building sprite for this region's culture.
+    hq_sprite_ = {};
     const std::string hq_sprite_id = "bldg." + culture + ".head";
     for (const data::SpriteEntry& sprite : registry_->manifest().sprites) {
         if (sprite.id == hq_sprite_id) {
@@ -144,8 +161,8 @@ void GameplayScene::load_map(const std::string& map_id) {
     }
 
     // Center the camera on the first player's starting headquarters.
-    if (!world_->region().regions().empty()) {
-        const world::Headquarters& hq = world_->region().regions().front().headquarters;
+    if (!reg.regions().empty()) {
+        const world::Headquarters& hq = reg.regions().front().headquarters;
         const render::Vec2 hq_world = render::tile_to_world(
             static_cast<float>(hq.x), static_cast<float>(hq.y));
         int win_w = 0, win_h = 0;
@@ -155,6 +172,13 @@ void GameplayScene::load_map(const std::string& map_id) {
             hq_world.y - win_h / 2.0f,
         };
     }
+
+    build_menu_data_built_ = false;
+}
+
+render::TerrainRenderer* GameplayScene::active_terrain_renderer() const {
+    if (terrain_renderers_.empty()) return nullptr;
+    return terrain_renderers_[active_region_index_].get();
 }
 
 GameplayScene::~GameplayScene() {
@@ -367,7 +391,7 @@ void GameplayScene::render() {
     SDL_RenderClear(renderer_);
 
     if (world_) {
-        terrain_renderer_->render(camera_);
+        active_terrain_renderer()->render(camera_);
         render_construction_overlays();  // after terrain, before buildings/decorations
         render_decorations();
         render_buildings();
@@ -386,14 +410,16 @@ void GameplayScene::render() {
 // ---------------------------------------------------------------------------
 
 void GameplayScene::render_decorations() {
-    for (const world::Decoration& dec : world_->region().decorations()) {
+    const world::Region& reg = world_->region(active_region_index_);
+    render::TerrainRenderer* tr = active_terrain_renderer();
+    for (const world::Decoration& dec : reg.decorations()) {
         const auto it = decoration_sprites_.find(dec.sprite);
         if (it == decoration_sprites_.end() || !it->second.texture.valid()) continue;
         const AnchoredSprite& spr = it->second;
 
         render::Vec2 world_pos = render::tile_to_world(
             static_cast<float>(dec.x), static_cast<float>(dec.y));
-        world_pos.y -= terrain_renderer_->sample_height(dec.x, dec.y)
+        world_pos.y -= tr->sample_height(dec.x, dec.y)
                        * render::kPixelsPerAltiUnit;
         const render::Vec2 screen_pos = camera_.world_to_screen(world_pos);
 
@@ -409,11 +435,13 @@ void GameplayScene::render_decorations() {
 void GameplayScene::render_buildings() {
     if (!hq_sprite_.texture.valid()) return;
 
-    for (const world::MapRegion& map_region : world_->region().regions()) {
+    const world::Region& reg = world_->region(active_region_index_);
+    render::TerrainRenderer* tr = active_terrain_renderer();
+    for (const world::MapRegion& map_region : reg.regions()) {
         const world::Headquarters& hq = map_region.headquarters;
         render::Vec2 world_pos = render::tile_to_world(
             static_cast<float>(hq.x), static_cast<float>(hq.y));
-        world_pos.y -= terrain_renderer_->sample_height(hq.x, hq.y)
+        world_pos.y -= tr->sample_height(hq.x, hq.y)
                        * render::kPixelsPerAltiUnit;
         const render::Vec2 screen_pos = camera_.world_to_screen(world_pos);
 
@@ -500,8 +528,10 @@ void GameplayScene::rebuild_build_menu_data() {
         {"cana", "Canal",    "", 0, true},
     };
 
-    // Tabs 1-4 — buildings filtered by type.
+    // Tabs 1-4 — buildings for the active region's culture set, filtered by type.
+    const std::string& culture = world_->region(active_region_index_).culture_set();
     for (const auto& [id, bldg] : registry_->buildings()) {
+        if (bldg.culture_set != culture) continue;
         int tab = -1;
         if      (bldg.type == "mark")                     tab = 1;
         else if (bldg.type == "bdep" || bldg.type == "ware") tab = 2;
@@ -538,7 +568,8 @@ void GameplayScene::on_build_menu_item_selected(const std::string& id) {
 }
 
 void GameplayScene::render_construction_overlays() {
-    if (!construction_mode_.is_active() || !terrain_renderer_) return;
+    render::TerrainRenderer* tr = active_terrain_renderer();
+    if (!construction_mode_.is_active() || !tr) return;
 
     std::vector<render::OverlayTileSet> overlays;
 
@@ -584,7 +615,7 @@ void GameplayScene::render_construction_overlays() {
     }
 
     if (!overlays.empty())
-        overlay_renderer_.render(renderer_, camera_, *terrain_renderer_, overlays);
+        overlay_renderer_.render(renderer_, camera_, *tr, overlays);
 }
 
 void GameplayScene::render_hud_overlay() {
@@ -627,49 +658,71 @@ bool GameplayScene::pick_tile_from_mouse(int screen_x, int screen_y,
 void GameplayScene::render_dev_gui() {
     ImGui::Begin("Dev Tools", &show_dev_gui_);
 
-    if (ImGui::CollapsingHeader("Map", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("Episode", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (world_) {
-            ImGui::TextDisabled("%-12s  culture: %s",
-                current_map_id_.c_str(),
-                world_->region().culture_set().c_str());
+            const world::Region& reg = world_->region(active_region_index_);
+            ImGui::TextDisabled("Episode: %-6s  Region: %s  Culture: %s",
+                current_episode_id_.c_str(),
+                reg.name().c_str(),
+                reg.culture_set().c_str());
         } else {
-            ImGui::TextDisabled("(no map loaded)");
+            ImGui::TextDisabled("(no episode loaded)");
         }
 
-        const auto& maps = registry_->manifest().maps;
-        if (!maps.empty()) {
+        const auto& episodes = registry_->episodes();
+        if (!episodes.empty()) {
             ImGui::SetNextItemWidth(-1);
-            if (ImGui::BeginListBox("##maplist", ImVec2(0, 200))) {
-                for (int i = 0; i < static_cast<int>(maps.size()); ++i) {
-                    const bool selected = (i == selected_map_index_);
-                    if (ImGui::Selectable(maps[i].id.c_str(), selected))  {
-                        if (maps[i].id != current_map_id_) {
-                            load_map(maps[i].id);
-                        }
+            if (ImGui::BeginListBox("##eplist", ImVec2(0, 120))) {
+                int i = 0;
+                for (const auto& [ep_id, ep] : episodes) {
+                    const bool selected = (i == selected_episode_index_);
+                    char label[64];
+                    std::snprintf(label, sizeof(label), "%-6s  %s",
+                                  ep_id.c_str(), ep.name.c_str());
+                    if (ImGui::Selectable(label, selected)) {
+                        if (ep_id != current_episode_id_)
+                            load_episode(ep_id);
                     }
                     if (selected) ImGui::SetItemDefaultFocus();
+                    ++i;
                 }
                 ImGui::EndListBox();
             }
         } else {
-            ImGui::TextDisabled("No maps in manifest.");
+            ImGui::TextDisabled("No episodes in registry.");
+        }
+
+        // Region switcher — only shown for multi-region episodes.
+        if (world_ && world_->region_count() > 1) {
+            ImGui::Separator();
+            ImGui::TextUnformatted("Regions:");
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::BeginListBox("##reglist", ImVec2(0, 80))) {
+                for (int i = 0; i < world_->region_count(); ++i) {
+                    const bool selected = (i == active_region_index_);
+                    if (ImGui::Selectable(world_->region(i).name().c_str(), selected))
+                        activate_region(i);
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndListBox();
+            }
         }
     }
 
     ImGui::Separator();
-    if (terrain_renderer_) {
+    if (auto* tr = active_terrain_renderer()) {
         if (ImGui::CollapsingHeader("Terrain")) {
-            ImGui::Checkbox("Shore overlays",    &terrain_renderer_->shore_overlays_enabled);
-            ImGui::Checkbox("Slope shading",     &terrain_renderer_->slope_shading_enabled);
-            ImGui::Checkbox("Terrain blending",  &terrain_renderer_->terrain_blending_enabled);
-            ImGui::Checkbox("Debug labels",      &terrain_renderer_->terrain_debug_labels_enabled);
+            ImGui::Checkbox("Shore overlays",    &tr->shore_overlays_enabled);
+            ImGui::Checkbox("Slope shading",     &tr->slope_shading_enabled);
+            ImGui::Checkbox("Terrain blending",  &tr->terrain_blending_enabled);
+            ImGui::Checkbox("Debug labels",      &tr->terrain_debug_labels_enabled);
             if (ImGui::DragFloat("Alti scale factor",
                                  &render::kAltiScaleFactor, 0.1f, 0.5f, 50.0f,
                                  "%.2f (EXE: 10.0)")) {
                 render::kAltiToWorldHeight  = render::kAltiScaleFactor / 256.0f;
                 render::kPixelsPerAltiUnit  = render::kPixelsPerWorldHeightUnit
                                               * render::kAltiToWorldHeight;
-                terrain_renderer_->rebuild_vertex_colors();
+                tr->rebuild_vertex_colors();
             }
             if (ImGui::DragFloat("Pixels per world-height unit",
                                  &render::kPixelsPerWorldHeightUnit, 0.25f, 1.0f, 200.0f,
@@ -745,7 +798,8 @@ void GameplayScene::render_font_test() {
 void GameplayScene::render_lighting_window() {
     ImGui::Begin("Lighting controls", &show_lighting_window_);
 
-    if (!terrain_renderer_) {
+    render::TerrainRenderer* tr = active_terrain_renderer();
+    if (!tr) {
         ImGui::TextUnformatted("No terrain loaded.");
         ImGui::End();
         return;
@@ -776,7 +830,7 @@ void GameplayScene::render_lighting_window() {
     }
 
     if (changed)
-        terrain_renderer_->rebuild_vertex_colors();
+        tr->rebuild_vertex_colors();
 
     ImGui::End();
 }

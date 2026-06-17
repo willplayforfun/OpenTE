@@ -107,11 +107,8 @@ inline void from_json(const nlohmann::json& j, HeightmapData& h) {
     h.data = j.value("data", "");
 }
 
-/// Per-tile texture-page index grid (B15 Round 35/36, terrain-blending-plan.md
-/// Stage A.1): same "base64-rle" convention as `TerrainData`, values 1-13
-/// indexing into `tables/terrain_textures.json`. Optional -- older extracted
-/// maps without this field fall back to texture-page 1 everywhere
-/// (see region.cpp).
+/// Per-tile texture-page index grid: same "base64-rle" convention as `TerrainData`, values 1-13
+/// indexing into `tables/terrain_textures.json`.
 struct TextureIndexData {
     std::string encoding;
     std::string data;

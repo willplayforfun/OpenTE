@@ -50,7 +50,7 @@ private:
 // Label — static text (or tinted rect if no font is available)
 // ---------------------------------------------------------------------------
 
-/// Renders a UTF-8 text string using the extracted Trade Empires bitmap font.
+/// Renders a UTF-8 text string using the extracted bitmap font.
 /// Vertically centred within bounds; horizontally offset by 4 px from the left.
 ///
 /// When `font` is null the label draws a semi-transparent tinted rect as a

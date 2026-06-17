@@ -3,8 +3,10 @@
 #include <SDL.h>
 
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "core/scene.h"
 #include "data/registry.h"
@@ -31,7 +33,7 @@ public:
     GameplayScene(SDL_Window* window,
                   SDL_Renderer* renderer,
                   const data::DataRegistry& registry,
-                  const std::string& map_id);
+                  const std::string& episode_id);
 
     ~GameplayScene();
 
@@ -48,7 +50,9 @@ private:
         float anchor_y = 0.0f;
     };
 
-    void load_map(const std::string& map_id);
+    void load_episode(const std::string& episode_id);
+    void activate_region(int index);
+    render::TerrainRenderer* active_terrain_renderer() const;
     void load_sprites();
     void render_decorations();
     void render_buildings();
@@ -69,10 +73,14 @@ private:
     SDL_Renderer* renderer_ = nullptr;
     const data::DataRegistry* registry_ = nullptr;
 
-    std::optional<world::World>           world_;
-    std::optional<render::TerrainTileset> terrain_tileset_;
-    std::optional<render::TerrainRenderer> terrain_renderer_;
+    std::unique_ptr<world::World>                        world_;
+    std::vector<std::unique_ptr<render::TerrainTileset>>  terrain_tilesets_;
+    std::vector<std::unique_ptr<render::TerrainRenderer>> terrain_renderers_;
     render::Camera camera_;
+
+    std::string current_episode_id_;
+    int         selected_episode_index_ = 0;
+    int         active_region_index_    = 0;
 
     AnchoredSprite                         hq_sprite_;
     std::map<std::string, AnchoredSprite>  decoration_sprites_;
@@ -85,9 +93,6 @@ private:
     bool pan_right_ = false;
     bool pan_up_    = false;
     bool pan_down_  = false;
-
-    std::string current_map_id_;
-    int         selected_map_index_ = 0;
 
     bool wants_quit_           = false;
     bool wants_main_menu_      = false;

@@ -50,7 +50,7 @@ std::vector<std::uint8_t> base64_decode(const std::string& input) {
 /// `tools/extractor/maps/region.py`'s `_encode_terrain_rle`: a flat sequence
 /// of `(type_byte: uint8, run_length: uint16 LE)` pairs covering the
 /// row-major `width*height` grid. Used by both `terrain.data` and
-/// `texture_index.data` (terrain-blending-plan.md Stage A.1).
+/// `texture_index.data`.
 std::vector<std::uint8_t> decode_byte_rle(const std::string& base64_data, int width, int height) {
     const std::vector<std::uint8_t> bytes = base64_decode(base64_data);
     const std::size_t total = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
@@ -82,10 +82,8 @@ std::vector<TerrainType> decode_terrain_rle(const std::string& base64_data, int 
     return terrain;
 }
 
-/// Decodes `texture_index.data` (Stage A.1), clamping to the valid
-/// `terrain_textures.json` index range `[1, 13]` (per B15 Round 35, a
-/// `mapp.terr & 0xf` value of 0 or >13 shouldn't occur but isn't exhaustively
-/// verified -- clamp rather than crash). Returns an all-`1` grid if
+/// Decodes `texture_index.data`, clamping to the valid
+/// `terrain_textures.json` index range `[1, 13]`. Returns an all-`1` grid if
 /// `base64_data` is empty (older extracted maps without this field).
 std::vector<std::uint8_t> decode_texture_index_rle(const std::string& base64_data, int width, int height) {
     const std::size_t total = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
@@ -101,8 +99,7 @@ std::vector<std::uint8_t> decode_texture_index_rle(const std::string& base64_dat
 
 /// Decodes the `heightmap.data` "raw-base64" format defined by
 /// `tools/extractor/maps/region.py`: the row-major `mapp.alti` byte grid,
-/// base64-encoded verbatim. Returns an all-zero grid if `base64_data` is
-/// empty (older extracted maps without a `heightmap` field).
+/// base64-encoded verbatim. Returns an all-zero grid if `base64_data` is empty.
 std::vector<std::uint8_t> decode_heightmap(const std::string& base64_data, int width, int height) {
     const std::size_t total = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
     if (base64_data.empty()) {
