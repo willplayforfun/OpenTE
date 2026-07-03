@@ -60,6 +60,9 @@ private:
     void render_dev_gui();
     void render_font_test();
     void render_lighting_window();
+    /// Re-zooms the camera to `new_zoom`, keeping the viewport center fixed.
+    void set_zoom_centered(float new_zoom);
+    void render_zoom_overlay();
 
     // Construction mode helpers.
     void rebuild_build_menu_data();
@@ -100,6 +103,7 @@ private:
     bool show_dev_gui_         = false;
     bool show_lighting_window_ = false;
     bool show_font_test_       = false;
+    bool show_zoom_overlay_    = false;
 
     ui::Widget*  build_menu_ptr_ = nullptr;
     ui::HudBars* hud_ptr_        = nullptr;

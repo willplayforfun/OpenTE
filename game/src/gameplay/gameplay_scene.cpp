@@ -411,16 +411,8 @@ bool GameplayScene::handle_event(const SDL_Event& event) {
 
         case SDL_MOUSEWHEEL:
             if (event.wheel.y != 0) {
-                float old_zoom = camera_.zoom;
-                camera_.set_zoom(camera_.zoom +
-                                 (event.wheel.y > 0 ? kZoomStep : -kZoomStep));
-                float new_zoom = camera_.zoom;
-                int win_w = 0, win_h = 0;
-                SDL_GetWindowSize(window_, &win_w, &win_h);
-                float cx = win_w / 2.0f;
-                float cy = win_h / 2.0f;
-                camera_.world_pixel_offset.x += cx / old_zoom - cx / new_zoom;
-                camera_.world_pixel_offset.y += cy / old_zoom - cy / new_zoom;
+                set_zoom_centered(camera_.zoom +
+                                  (event.wheel.y > 0 ? kZoomStep : -kZoomStep));
             }
             return true;
 
@@ -450,6 +442,7 @@ void GameplayScene::render() {
     }
 
     render_hud_overlay();  // before UI widgets so they draw on top
+    render_zoom_overlay();
     ui_manager_.render();
 
     if (show_font_test_)       render_font_test();
@@ -689,6 +682,37 @@ void GameplayScene::render_construction_overlays() {
         overlay_renderer_.render(renderer_, camera_, *tr, overlays);
 }
 
+void GameplayScene::set_zoom_centered(float new_zoom) {
+    float old_zoom = camera_.zoom;
+    camera_.set_zoom(new_zoom);
+    float new_zoom_clamped = camera_.zoom;
+    int win_w = 0, win_h = 0;
+    SDL_GetWindowSize(window_, &win_w, &win_h);
+    float cx = win_w / 2.0f;
+    float cy = win_h / 2.0f;
+    camera_.world_pixel_offset.x += cx / old_zoom - cx / new_zoom_clamped;
+    camera_.world_pixel_offset.y += cy / old_zoom - cy / new_zoom_clamped;
+}
+
+void GameplayScene::render_zoom_overlay() {
+    if (!show_zoom_overlay_) return;
+    render::BitmapFont* font = ui_manager_.font();
+    if (!font) return;
+
+    static constexpr SDL_Color kTextColor  = {220, 220, 220, 255};
+    static constexpr SDL_Color kTextShadow = {  0,   0,   0, 255};
+
+    char msg[32];
+    std::snprintf(msg, sizeof(msg), "Zoom: %.2fx", camera_.zoom);
+    const int tw = font->measure_text(msg);
+    int win_w = 0, win_h = 0;
+    SDL_GetWindowSize(window_, &win_w, &win_h);
+    font->draw_text_shadowed(renderer_, msg,
+                             win_w - tw - 8,
+                             ui::HudBars::kTopBarH + 6,
+                             kTextColor, kTextShadow);
+}
+
 void GameplayScene::render_hud_overlay() {
     if (!sim_paused_) return;
     render::BitmapFont* font = ui_manager_.font();
@@ -835,6 +859,13 @@ void GameplayScene::render_dev_gui() {
         ImGui::Separator();
         if (ImGui::Button("Lighting controls..."))
             show_lighting_window_ = true;
+    }
+    ImGui::Separator();
+    if (ImGui::CollapsingHeader("Camera")) {
+        ImGui::Checkbox("Show zoom overlay", &show_zoom_overlay_);
+        ImGui::Text("Zoom: %.2fx", camera_.zoom);
+        if (ImGui::Button("Snap zoom to nearest integer"))
+            set_zoom_centered(std::round(camera_.zoom));
     }
     ImGui::Separator();
     if (ImGui::CollapsingHeader("Font")) {
