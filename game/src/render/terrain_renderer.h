@@ -103,12 +103,21 @@ private:
     /// Draws the map-edge skirt (south and east edges of the map diamond).
     void render_skirts(const Camera& camera) const;
 
-    /// Core network-decal drawing logic: applies `conn` to the three LUTs, selects
+    /// Core network-decal drawing logic: applies `conn` to the decal LUTs, selects
     /// the atlas cell, and draws the sprite fan onto `corners` (NW/NE/SE/SW order).
-    /// Called by both `render_network_decal` (real connectivity from Region) and
-    /// `render_preview_path` (synthesized preview connectivity).
+    /// `tx`/`ty` locate the tile so canals can test their water neighbors (a canal
+    /// endpoint at the shore draws a sea-mouth cell). Called by both
+    /// `render_network_decal` (real connectivity from Region) and
+    /// `render_preview_path` (synthesized preview).
     void draw_network_conn(const world::TileConnectivity& conn,
+                           int tx, int ty,
                            const SDL_Vertex corners[4]) const;
+
+    /// Bitmask over the 8 neighbors of `(tx, ty)`: bit d is CLEARED when
+    /// neighbor d is shore-water (the "seas" texture page), so 0xff = no water
+    /// adjacent. Shared by the shore-overlay pass and the canal sea-mouth test --
+    /// the original engine uses the identical mask + LUT for both.
+    std::uint8_t water_neighbor_mask(int tx, int ty) const;
 
     /// Draws `hidd` (starfield) textured tile fans for all viewport-visible
     /// tiles outside the map bounds.

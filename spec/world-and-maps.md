@@ -135,54 +135,66 @@ Notes:
 Every tile has:
 
 1. A **terrain type** (from `terrain.data`, immutable for a given map).
-2. A **connectivity mask** — which of the 6 movement networks (`none`,
-   `trail`, `road`, `rail`, `canal`, `deep_water`) can be entered from this
-   tile, and in which of the 8 directions. This is **mutable at runtime**:
-   building a road/rail/canal segment updates the mask for the affected
-   tiles (and their neighbors), exactly mirroring the original's incremental
-   "connectivity hash map" update on path-segment commit (confirmed by RE
-   analysis).
+2. A **connectivity mask** — which movement networks (trail, road, rail,
+   canal) connect out of this tile and in which directions, plus a bridge
+   marker. This is **mutable at runtime**: building a road/rail/canal
+   segment updates the mask for the affected tiles, exactly mirroring the
+   original's incremental "connectivity hash map" update on path-segment
+   commit.
 
-### Modern representation
+### Representation
 
 Rather than the original's sparse hash-map-of-6-byte-records (a 2001
 memory-footprint optimization), the clone stores connectivity as a **dense
-2D array of small structs**, one per tile:
+2D array of small structs**, one per tile — `width*height`, row-major,
+indexed `[ty*width + tx]` (128x128 x 6 bytes = 96 KB per region, trivial).
+
+The 6 bytes match the original's mask record exactly (this is the
+implemented `world::TileConnectivity`; byte semantics per
+`documentation/extracted/exe_trail_re_findings.md` §0 corrections):
 
 ```cpp
 struct TileConnectivity {
-    // bit i set => network can use direction i (8 directions, see below)
-    uint8_t trail_extra = 0;  // original "b0": trail-only extra connections
-    uint8_t road = 0;         // original "b1": also usable by trail (trail = road | trail_extra)
-    uint8_t rail = 0;         // original "b2"
-    uint8_t canal = 0;
-    uint8_t deep_water = 0xFF; // open ocean: all directions, by default
-    uint8_t reserved = 0;
+    uint8_t trail  = 0;    // byte 0: trail connections
+    uint8_t road   = 0;    // byte 1: road connections (per-direction upgrade over trail)
+    uint8_t rail   = 0;    // byte 2: rail connections (cardinal-only, like trail/road)
+    uint8_t canal  = 0;    // byte 3: canal connections (the only 8-directional network)
+    uint8_t bridge = 0xff; // byte 4: 0xff = no bridge; anything else marks a bridge tile
+    uint8_t bridge_aux = 0; // byte 5: second mapp.brid byte (semantics not yet decoded)
 };
 ```
 
-128x128 tiles x 6 bytes = 96 KB per region — trivial for a modern target;
-no need for the original's hash map at all. `width*height` array, row-major,
-indexed `[ty*width + tx]`.
-
-**8-direction order** (clockwise from NW, matches the decoded original for
-easy cross-checking against RE notes):
-`0=NW(-1,-1) 1=N(0,-1) 2=NE(1,-1) 3=E(1,0) 4=SE(1,1) 5=S(0,1) 6=SW(-1,1) 7=W(-1,0)`.
+**Direction bit encoding**, clockwise from NW: `0x01=NW, 0x02=N, 0x04=NE,
+0x08=E, 0x10=SE, 0x20=S, 0x40=SW, 0x80=W`. Trail, road, and rail are
+cardinal-only networks (odd bits) — a "diagonal" route is a staircase of
+cardinal segments (confirmed against authored `mapp.path` data, which never
+contains a diagonal bit). Canal is 8-directional: a diagonal canal
+connection is encoded as its diagonal bit PLUS both flanking cardinal bits
+(NE connection = `0x04|0x02|0x08` = `0x0e`, SE = `0x38`, SW = `0xe0`,
+NW = `0x83`) — decoded from the 33 valid canal-decal keys, see
+`documentation/extracted/exe_trail_re_findings.md` §0 correction 12.
 
 ### "Can network N step from tile A to tile B?" rule
 
 This is the rule the original's `RoadFinderIterator`/`TrailFinderIterator`
 etc. implement, reproduced here for the clone:
 
-- **Trail**: `(trail_extra | road) & (1 << dir)` must be set on tile A.
-- **Road**: `road & (1 << dir)` must be set on tile A.
-- **Rail**: `rail & (1 << dir)` must be set on tile A.
-- **Canal**: `canal & (1 << dir)` must be set on tile A (and the
+- **Trail**: `(trail | road) & dir_bit` must be set on tile A (trails may
+  use roads).
+- **Road**: `road & dir_bit` must be set on tile A.
+- **Rail**: `rail & dir_bit` must be set on tile A.
+- **Canal**: `canal & dir_bit` must be set on tile A (and the
   building-placement gate additionally requires water adjacency for canal
-  *buildings* — see [input.md](input.md)).
-- **Deep water**: `deep_water & (1 << dir)` set on tile A — defaults to "all
-  directions" for open ocean tiles, `0` for land tiles not explicitly marked
-  navigable.
+  *buildings* — see [input.md](input.md)). CAUTION for a faithful port:
+  the original's boat pathfinding (`CanalFinderIterator::step @ 0x4a08e0`)
+  does NOT read the connectivity mask at all — it steps all 8 directions
+  over TERRAIN bytes (water nibble == 2, or flag bit 0x40 = "canal dug
+  here"; network writes also OR terrain bit 0x10). The mask's canal byte
+  drives the *decal*; boat *movement* is terrain-driven. See
+  `documentation/extracted/exe_trail_re_findings.md` §0 correction 13.
+- **Deep water**: open-ocean movement is not stored in the connectivity
+  mask; boats navigate by terrain type (deep-water tiles are freely
+  navigable).
 
 A pathfinder step from A to B (B = A + delta(dir)) is legal iff the rule
 above holds **and** B is in bounds. (The original also checks a reciprocal
@@ -195,45 +207,36 @@ it shouldn't.)
 When a player commits a pathway segment (Trail/Road/Rail/Canal) between two
 adjacent tiles in direction `dir`:
 
-1. Set the corresponding bit (`road`, `rail`, `canal`, or `trail_extra`) for
-   direction `dir` on the source tile, **and** the bit for the opposite
-   direction (`(dir+4) % 8`) on the destination tile — connectivity is
-   stored per-tile-per-outgoing-direction, so both ends need updating for a
-   bidirectional edge.
-2. Mark both tiles' connectivity-derived rendering (which sprite variant a
-   road tile uses depends on which neighbors it connects to) dirty for
-   re-evaluation next render/update.
-3. (Original behavior, optional for clone) clear any decoration on the
+1. Set the corresponding network's bit for direction `dir` on the source
+   tile, **and** the bit for the opposite direction on the destination tile
+   — connectivity is stored per-tile-per-outgoing-direction, so both ends
+   need updating for a bidirectional edge.
+2. (Original behavior, optional for clone) clear any decoration on the
    affected tiles ("remove the tree now under the road").
+
+The Stage-D decal renderer reads connectivity live each frame, so no
+explicit dirty-marking is needed for the visuals.
 
 ### Initial population from map data
 
-At map load, connectivity is seeded from two sources:
+At map load the grid starts all-default (`{0,0,0,0,0xff,0}` — the original
+hash map's default-on-miss record) and is seeded from the map's authored
+records, in this order:
 
-1. **Terrain defaults**: `deep_water` tiles get `deep_water = 0xFF` (all
-   directions navigable). Land tiles start with all pathway networks at `0`
-   (buildable only where the player constructs them).
+1. **`mapp.path`** entries `{x:int16, y:int16, flags:uint32}` *overwrite*
+   the tile's mask: `trail = flags>>24`, `road = (flags>>16)&0xff`,
+   `rail = (flags>>8)&0xff`, rest default.
+2. **`mapp.brid`** entries (same shape) *overwrite bytes 4/5 only*,
+   preserving path data: `bridge = flags&0xff`,
+   `bridge_aux = (flags>>8)&0xff`.
 
-2. **Pre-authored `paths[]`/`bridges[]` arrays**: the original's map files
-   contain explicit per-tile connectivity records (`mapp.path` and
-   `mapp.brid` arrays, each entry `{x, y, connectivity_mask}`). These seed
-   pre-built roads, trails, and bridges at their authored positions with
-   their authored connectivity masks. The `brid` (bridge) entries
-   merge-on-top-of the existing connectivity for their tiles, preserving any
-   terrain-default connectivity already set. Maps with no pre-built
-   infrastructure simply have empty arrays (equivalent to the
-   terrain-defaults-only case).
+A bridge tile (`bridge != 0xff`) suppresses the tile's network decal — the
+bridge visual is a separate sprite (see
+`OpenTE/implementation/bridge-plan.md`).
 
-   The map JSON schema should include:
-   ```json
-   "paths": [
-     { "x": 45, "y": 62, "trail_extra": 5, "road": 0, "rail": 0, "canal": 0 }
-   ],
-   "bridges": [
-     { "x": 50, "y": 30, "trail_extra": 0, "road": 10, "rail": 0, "canal": 0 }
-   ]
-   ```
-   (Per-network bitmasks matching the `TileConnectivity` struct above.)
+In the extracted `maps/<id>.json` this grid is stored as the `connectivity`
+field, RLE-compressed ("base64-rle6": `(6-byte tile, uint16 LE run length)`
+pairs) — see `tools/extractor/maps/region.py`.
 
 ## In-memory world model
 

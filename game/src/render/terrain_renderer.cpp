@@ -82,8 +82,12 @@ constexpr std::uint8_t kTrailLUT[256] = {
     0x15, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x34,
 };
 
-/// kCanalLUT: accumulated connectivity code → cell (0-40, all on canal atlas page 0xf6).
-constexpr std::uint8_t kCanalLUT[256] = {
+/// kRailLUT: accumulated connectivity code → cell (0-40, all on the rail atlas,
+/// page 0xf6). Rail shares the accumulated-code space with trail/road: pure-rail
+/// cells 0-10 (straights/turns/tees/cross) and endpoints 37-40 key on the low
+/// nibble; cells 11-36 key on rail low-nibble + road high-nibble combinations
+/// (road-over-rail level crossings). Rail is cardinal-only.
+constexpr std::uint8_t kRailLUT[256] = {
     0xff, 0x28, 0x25, 0x05, 0x26, 0x00, 0x03, 0x09, 0x27, 0x02, 0x01, 0x06, 0x04, 0x08, 0x07, 0x0a,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -102,8 +106,40 @@ constexpr std::uint8_t kCanalLUT[256] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 };
 
-/// kRailLUT: opaque rail connectivity byte → cell (0-32, all on rail atlas page 0xfa).
-constexpr std::uint8_t kRailLUT[256] = {
+/// kCanalMouthLUT: canal connectivity byte → sea-mouth cell (45-52) on the
+/// canal atlas, used when a canal tile touches shore-water (see the canal
+/// branch of draw_network_conn). Decoded byte-exact from the EXE's dispatch
+/// table 0x46c3c8 + stub jump table 0x46c3a4. The 8 valid keys are exactly
+/// the 8 single-connection (endpoint) configurations — a canal opening into
+/// the sea: cardinal endpoints 0x02/0x08/0x20/0x80 → cells 49/45/47/51 and
+/// diagonal endpoints 0x0e/0x38/0x83/0xe0 (NE/SE/NW/SW) → 48/46/52/50.
+constexpr std::uint8_t kCanalMouthLUT[256] = {
+    0xff, 0xff, 0x31, 0xff, 0xff, 0xff, 0xff, 0xff, 0x2d, 0xff, 0xff, 0xff, 0xff, 0xff, 0x30, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0x2f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x2e, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0x33, 0xff, 0xff, 0x34, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0x32, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+};
+
+/// kCanalLUT: canal connectivity byte → cell (0-32) on the canal atlas
+/// (page 0xfa). Canal is the only 8-directional network; a diagonal
+/// connection is keyed as its diagonal bit plus BOTH flanking cardinal bits
+/// (NE = 0x0e, SE = 0x38, SW = 0xe0, NW = 0x83). The 33 valid keys are: 8
+/// single-connection endpoints, 2 cardinal + 2 diagonal straights, all
+/// two-connection bends (cardinal-cardinal, cardinal-diagonal,
+/// diagonal-diagonal), and the cardinal tees + 4-way cross.
+constexpr std::uint8_t kCanalLUT[256] = {
     0xff, 0xff, 0x16, 0xff, 0xff, 0xff, 0xff, 0xff, 0x15, 0xff, 0x1c, 0xff, 0xff, 0xff, 0x04, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0x17, 0xff, 0x0a, 0xff, 0xff, 0xff, 0xff, 0xff, 0x19, 0xff, 0x20, 0xff, 0xff, 0xff, 0x12, 0xff,
@@ -512,22 +548,14 @@ void TerrainRenderer::render_shore_overlays(int tx, int ty, const SDL_Vertex cor
     };
 
     // Shore overlays only appear on land tiles, not water.
-    if (region_->terrain_at(tx, ty) < world::TerrainType::Buildable) {
+    // texture_index <= 2 ("deep"/"seas") catches tiles whose terrain type is
+    // stale/wrong in the data but whose texture reveals they are in the water zone.
+    if (region_->terrain_at(tx, ty) == world::TerrainType::DeepWater ||
+        region_->terrain_at(tx, ty) == world::TerrainType::ShallowWater) {
         return;
     }
 
-    // Build a bitmask of which of the 8 neighbors are shore-water (cleared bits = water neighbor).
-    const int w = region_->width();
-    const int h = region_->height();
-    int mask = 0xFF;
-    for (int dir = 0; dir < 8; ++dir) {
-        const int nx = tx + kDirDx[dir];
-        const int ny = ty + kDirDy[dir];
-        if (nx >= 0 && nx < w && ny >= 0 && ny < h &&
-            texture_index_at(nx, ny) == 2) {
-            mask ^= (1 << dir);
-        }
-    }
+    const std::uint8_t mask = water_neighbor_mask(tx, ty);
     if (mask == 0xFF) {
         return;
     }
@@ -649,10 +677,26 @@ void TerrainRenderer::render_skirts(const Camera& camera) const {
 }
 
 void TerrainRenderer::render_network_decal(int tx, int ty, const SDL_Vertex corners[4]) const {
-    draw_network_conn(region_->connectivity_at(tx, ty), corners);
+    draw_network_conn(region_->connectivity_at(tx, ty), tx, ty, corners);
+}
+
+std::uint8_t TerrainRenderer::water_neighbor_mask(int tx, int ty) const {
+    const int w = region_->width();
+    const int h = region_->height();
+    std::uint8_t mask = 0xFF;
+    for (int dir = 0; dir < 8; ++dir) {
+        const int nx = tx + kDirDx[dir];
+        const int ny = ty + kDirDy[dir];
+        if (nx >= 0 && nx < w && ny >= 0 && ny < h &&
+            texture_index_at(nx, ny) == 2) {
+            mask = static_cast<std::uint8_t>(mask & ~(1 << dir));
+        }
+    }
+    return mask;
 }
 
 void TerrainRenderer::draw_network_conn(const world::TileConnectivity& conn,
+                                        int tx, int ty,
                                         const SDL_Vertex corners[4]) const {
     if (!tileset_) return;
 
@@ -660,17 +704,20 @@ void TerrainRenderer::draw_network_conn(const world::TileConnectivity& conn,
     auto draw_cell = [&](SDL_Texture* atlas, int cell) {
         if (!atlas || cell < 0 || cell >= static_cast<int>(std::size(kShoreUvIndex))) return;
 
-        constexpr float kInsetU = 1.0f / 128.0f;
-        constexpr float kInsetV = 1.0f / 256.0f;
-        constexpr float kMidVBias = 0.002f;
-
+        // EXE-exact UVs -- the original applies no insets or bias, and none are
+        // safe here: at 1:1 zoom pixel centers sample at u=(k+0.5)/cellWidth,
+        // so even a half-texel inset pushes EVERY sample across a texel
+        // boundary and shifts the whole cell's art by a full pixel (this
+        // visibly misaligned adjacent rail segments). Nearest-neighbor
+        // interpolation at pixel centers never reaches the exact cell
+        // boundary, so no anti-bleed guard is needed either.
         const auto [idx0, idx1] = kShoreUvIndex[cell];
-        const float left_u  = shore_uv(idx0)     + kInsetU;
+        const float left_u  = shore_uv(idx0);
         const float mid_u   = shore_uv(idx0 + 2);
-        const float right_u = shore_uv(idx0 + 4) - kInsetU;
-        const float top_v   = shore_uv(idx1 + 1) + kInsetV;
-        const float mid_v   = shore_uv(idx1 + 2) + kMidVBias;
-        const float bot_v   = shore_uv(idx1 + 3) - kInsetV;
+        const float right_u = shore_uv(idx0 + 4);
+        const float top_v   = shore_uv(idx1 + 1);
+        const float mid_v   = shore_uv(idx1 + 2);
+        const float bot_v   = shore_uv(idx1 + 3);
 
         SDL_Vertex fan[5];
         fan[0].position = {
@@ -699,28 +746,50 @@ void TerrainRenderer::draw_network_conn(const world::TileConnectivity& conn,
             ((raw >> 4) & 0x08u));
     };
 
-    // Priority 1: rail (hash-table lookup; wins over everything else).
-    if (conn.rail != 0) {
-        const std::uint8_t cell = kRailLUT[conn.rail];
-        if (cell != 0xff) draw_cell(tileset_->network(3), cell);
+    // Priority 1: canal (byte 3 -- tested first in the EXE builder, 0x46bf08).
+    if (conn.canal != 0) {
+        // A canal endpoint at shore-water opens into the sea: the shore
+        // water-neighbor mask is fed through kShoreLUT0 (EXE 0x46bf13) and
+        // any hit selects the sea-mouth dispatch on the canal key. No
+        // fallback to the land LUT on a dispatch miss.
+        if (kShoreLUT0[water_neighbor_mask(tx, ty)] != 0xff) {
+            const std::uint8_t cell = kCanalMouthLUT[conn.canal];
+            if (cell != 0xff) draw_cell(tileset_->network(2), cell);
+            return;
+        }
+        const std::uint8_t cell = kCanalLUT[conn.canal];
+        if (cell != 0xff) draw_cell(tileset_->network(2), cell);
         return;
     }
 
-    // Build the 8-bit accumulated connectivity code (3-phase, EXE 0x46c07a–0x46c17d).
-    //   Phase 1: pack road byte cardinal bits into bits 0-3.
-    //   Phase 2: trail_extra bits replace road bits (clear bits 0-3, set bits 4-7).
-    //   Phase 3: canal_dir bits OR into bits 0-3 (only when canal present).
-    std::uint8_t code = extract4(conn.road);
-    const std::uint8_t te4 = extract4(conn.trail_extra);
-    code = static_cast<std::uint8_t>((code & ~te4) | (te4 << 4));
-    if (conn.canal != 0xff) code |= extract4(conn.canal_dir);
+    // Bridge tiles draw no trail/road/rail decal (EXE 0x46c082-0x46c0e0):
+    // the bridge visual is a separate sprite pass (not yet implemented, see
+    // implementation/bridge-plan.md), so Stage D must not draw the network
+    // segment underneath it.
+    if (conn.bridge != 0xff) {
+        const std::uint8_t dirs = conn.trail ? conn.trail
+                                 : conn.road ? conn.road
+                                             : conn.rail;
+        if (extract4(dirs) + conn.bridge_aux != 0) return;
+    }
+
+    // Build the 8-bit accumulated connectivity code (3-phase, EXE 0x46c0e6–0x46c17d).
+    //   Phase 1: pack trail byte cardinal bits into bits 0-3 (low nibble).
+    //   Phase 2: road bits clear the matching trail bit and set bits 4-7
+    //            (a road replaces that direction's trail sprite -- roads are
+    //            the "upgrade" network).
+    //   Phase 3: rail bits OR into bits 0-3 (UNCONDITIONAL in the EXE).
+    std::uint8_t code = extract4(conn.trail);
+    const std::uint8_t r4 = extract4(conn.road);
+    code = static_cast<std::uint8_t>((code & ~r4) | (r4 << 4));
+    code |= extract4(conn.rail);
 
     if (code == 0) return;
 
-    // Priority 2: canal (when the canal flag signals a canal tile).
-    if (conn.canal != 0xff) {
-        const std::uint8_t cell = kCanalLUT[code];
-        if (cell != 0xff) draw_cell(tileset_->network(2), cell);
+    // Priority 2: rail, selected iff the rail byte is non-zero (EXE 0x46c185).
+    if (conn.rail != 0) {
+        const std::uint8_t cell = kRailLUT[code];
+        if (cell != 0xff) draw_cell(tileset_->network(3), cell);
         return;
     }
 
@@ -746,22 +815,22 @@ void TerrainRenderer::render_preview_path(
     const int map_h = region_->height();
     const int vw    = map_w + 1;
 
-    // Direction bits for A→B: 0x02=N, 0x08=E, 0x20=S, 0x80=W (same encoding as connectivity_ fields).
+    // Direction bits for a one-tile step (dx, dy), matching the connectivity
+    // byte encoding (see TileConnectivity): cardinals 0x02=N, 0x08=E, 0x20=S,
+    // 0x80=W; a diagonal step contributes its diagonal bit PLUS both flanking
+    // cardinals (the canal-key encoding, e.g. NE = 0x04|0x02|0x08 = 0x0e).
+    // The opposite direction is dir_bits(-dx, -dy).
     auto dir_bits = [](int dx, int dy) -> std::uint8_t {
         std::uint8_t b = 0;
         if (dy < 0) b |= 0x02;
         if (dx > 0) b |= 0x08;
         if (dy > 0) b |= 0x20;
         if (dx < 0) b |= 0x80;
+        if (dx != 0 && dy != 0) {
+            if (dx > 0) b |= (dy < 0) ? 0x04 : 0x10;  // NE : SE
+            else        b |= (dy < 0) ? 0x01 : 0x40;  // NW : SW
+        }
         return b;
-    };
-    auto opp_bits = [](std::uint8_t b) -> std::uint8_t {
-        std::uint8_t r = 0;
-        if (b & 0x02) r |= 0x20;
-        if (b & 0x08) r |= 0x80;
-        if (b & 0x20) r |= 0x02;
-        if (b & 0x80) r |= 0x08;
-        return r;
     };
 
     // Segments: committed waypoint[i-1]→waypoint[i], then live last→cursor.
@@ -774,31 +843,57 @@ void TerrainRenderer::render_preview_path(
     segments.push_back({waypoints.back().first, waypoints.back().second,
                         cursor_tx, cursor_ty});
 
-    // Build per-tile connectivity by rasterizing each segment (8-connected greedy diagonal).
+    // Build per-tile connectivity by rasterizing each segment. Trails, roads,
+    // and rails are cardinal-only networks (the EXE's code-builder never reads
+    // their diagonal bits, confirmed against authored mapp.path data), so
+    // their segments step ONE axis per tile -- a diagonal drag becomes a
+    // staircase of corner tiles. Canals are 8-directional and may step
+    // diagonally, producing true diagonal channel cells.
     // key = ty * map_w + tx
     std::unordered_map<int, world::TileConnectivity> tile_conns;
 
     auto apply_bits_to = [&](int tx, int ty, std::uint8_t bits) {
         if (tx < 0 || tx >= map_w || ty < 0 || ty >= map_h) return;
         world::TileConnectivity& c = tile_conns[ty * map_w + tx];
-        if      (path_type == "trai") { c.trail_extra |= bits; }
-        else if (path_type == "road") { c.road        |= bits; }
-        else if (path_type == "cana") { c.canal_dir   |= bits; c.canal = 0; }
-        else if (path_type == "rail") { c.rail        |= bits; }
+        if      (path_type == "trai") { c.trail |= bits; }
+        else if (path_type == "road") { c.road  |= bits; }
+        else if (path_type == "cana") { c.canal |= bits; }
+        else if (path_type == "rail") { c.rail  |= bits; }
     };
+
+    const bool diagonal_steps = (path_type == "cana");
 
     for (const Seg& seg : segments) {
         int x = seg.x0, y = seg.y0, px = -1, py = -1;
         while (true) {
             if (px != -1) {
-                const std::uint8_t ab = dir_bits(x - px, y - py);
-                apply_bits_to(px, py, ab);
-                apply_bits_to(x, y, opp_bits(ab));
+                const int dx = x - px;
+                const int dy = y - py;
+                apply_bits_to(px, py, dir_bits(dx, dy));
+                apply_bits_to(x, y, dir_bits(-dx, -dy));
+                if (dx != 0 && dy != 0) {
+                    // A diagonal step also writes the two tiles flanking the
+                    // shared corner, each with a 3-bit fan on the PERPENDICULAR
+                    // diagonal pointing at the other flank -- so flanks render
+                    // diagonal end-cap cells that widen the channel, not corner
+                    // bends. Decoded byte-exact from the original's pathway
+                    // applier (EXE 0x4997eb-0x499877 and 0x49996f: flank fans
+                    // {d+1,d+2,d+3} and {d+5,d+6,d+7} around step direction d).
+                    apply_bits_to(px + dx, py, dir_bits(-dx, dy));
+                    apply_bits_to(px, py + dy, dir_bits(dx, -dy));
+                }
             }
             px = x; py = y;
             if (x == seg.x1 && y == seg.y1) break;
-            if (x != seg.x1) x += (seg.x1 > x) ? 1 : -1;
-            if (y != seg.y1) y += (seg.y1 > y) ? 1 : -1;
+            if (diagonal_steps && x != seg.x1 && y != seg.y1) {
+                // Canal: step both axes while both differ (45-degree run).
+                x += (seg.x1 > x) ? 1 : -1;
+                y += (seg.y1 > y) ? 1 : -1;
+            } else if (std::abs(seg.x1 - x) >= std::abs(seg.y1 - y) && x != seg.x1) {
+                x += (seg.x1 > x) ? 1 : -1;
+            } else {
+                y += (seg.y1 > y) ? 1 : -1;
+            }
         }
     }
 
@@ -826,7 +921,7 @@ void TerrainRenderer::render_preview_path(
             corners[c].tex_coord = {0.0f, 0.0f};
         }
 
-        draw_network_conn(conn, corners);
+        draw_network_conn(conn, tx, ty, corners);
     }
 }
 

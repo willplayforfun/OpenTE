@@ -180,21 +180,29 @@ and `color.a` differ per pass):
   passes. `terrain_blending_enabled_`/`shore_overlays_enabled_` independently
   gate the B/C passes. None of the three are exposed in UI yet (code-level
   only).
-- **Network decals (Stage D)**: trail/road/canal/rail overlays, drawn after
+- **Network decals (Stage D)**: trail/road/rail/canal overlays, drawn after
   shore overlays for every tile whose `TileConnectivity` mask is non-zero.
-  Uses three 256-entry runtime LUTs (`kTrailLUT` / `kCanalLUT` / `kRailLUT`,
-  decoded from `.rdata` seeds in `terrain_renderer.cpp`) and the same 53-cell
-  `kShoreUvIndex` + diamond-quad UV machinery as shore overlays.  Priority:
-  rail wins → canal wins → trail/road.  Trail/road are split across two atlas
-  pages (`terrain.<culture>.trail1` / `trail2`); canal uses one
-  (`terrain.<culture>.canal`); rail uses one (`terrain.<culture>.rail`).  The
-  per-tile `TileConnectivity` struct (6 bytes: `road`, `trail_extra`,
-  `canal_dir`, `rail`, `canal`, `reserved`) lives in `world::Region::connectivity_`
-  and is zero-initialized at load time (no authored connectivity in base map
-  files). **Implemented** in `terrain_renderer.{h,cpp}` (`render_network_decal`
-  / `draw_network_conn`) and `terrain_tileset.{h,cpp}` (`network(layer)`
-  accessor). Network atlas extraction is in
-  `OpenTE/tools/extractor/sprites/terrain.py` (`_NETWORK_ATLAS_SUBTAGS`).
+  Uses four 256-entry LUTs (`kTrailLUT` / `kRailLUT` / `kCanalLUT` /
+  `kCanalMouthLUT`, decoded byte-exact from the EXE in
+  `terrain_renderer.cpp`) and the same 53-cell `kShoreUvIndex` +
+  diamond-quad UV machinery as shore overlays. Priority: canal wins (a
+  canal *endpoint* touching shore-water draws a sea-mouth cell 45-52, else
+  a land-canal cell 0-32) → bridge-tile decal suppression (`bridge !=
+  0xff`; the bridge visual is a separate sprite) → rail (41-LUT on the
+  accumulated code; mixed codes = road-over-rail level crossings) →
+  trail/road. Trail/road are split across two atlas pages
+  (`terrain.<culture>.trail1` / `trail2`); canal uses one
+  (`terrain.<culture>.canal` ← container `terr/cana/*`); rail uses one
+  (`terrain.<culture>.rail` ← `terr/rail/*`). Canal is the only
+  8-directional network — see [world-and-maps.md](world-and-maps.md) for
+  the diagonal-bit encoding. The per-tile `TileConnectivity` struct
+  (6 bytes: `trail`, `road`, `rail`, `canal`, `bridge`, `bridge_aux`)
+  lives in `world::Region::connectivity_`, seeded at load from the map's
+  authored `mapp.path`/`mapp.brid` records. **Implemented** in
+  `terrain_renderer.{h,cpp}` (`render_network_decal` / `draw_network_conn`)
+  and `terrain_tileset.{h,cpp}` (`network(layer)` accessor). Network atlas
+  extraction is in `OpenTE/tools/extractor/sprites/terrain.py`
+  (`_NETWORK_ATLAS_SUBTAGS`).
   See `documentation/extracted/exe_trail_re_findings.md` for full RE detail.
 
 A detailed, staged implementation plan — including the per-tile

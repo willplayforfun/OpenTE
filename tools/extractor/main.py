@@ -275,7 +275,7 @@ def run(game_dir: GameDirectory, output_dir: Path) -> None:
     # a_ui,6.{}: main game UI sprites in RGB565 (181 leaves across 26 dialog groups).
     # a_ui,5.{} holds the same dialog-group art in RGB555 PLUS the exclusive
     # 'main/' group (main-menu background, button highlights, logos).
-    print("Extracting a_ui sprites (181 sprites, this takes a while)...")
+    print("Extracting a_ui sprites (this takes a while)...")
     a_ui_data, a_ui_footer = load(game_dir.data_dir / "a_ui,6.{}")
     a_ui_root = parse_tree(a_ui_data, a_ui_footer)
     a_ui_entries = extract_ui_sprites("a_ui", a_ui_data, a_ui_root, output_dir)
@@ -289,7 +289,7 @@ def run(game_dir: GameDirectory, output_dir: Path) -> None:
 
     # d_ui,5.{}: debug/dev UI sprites in ARGB4444 with per-pixel alpha (379 leaves).
     # d_ui,6.{} is byte-identical to d_ui,5 -- skipped.
-    print("Extracting d_ui sprites (379 sprites, this takes a while)...")
+    print("Extracting d_ui sprites (this takes a while)...")
     d_ui_data, d_ui_footer = load(game_dir.data_dir / "d_ui,5.{}")
     d_ui_root = parse_tree(d_ui_data, d_ui_footer)
     d_ui_entries = extract_ui_sprites("d_ui", d_ui_data, d_ui_root, output_dir)

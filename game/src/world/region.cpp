@@ -97,6 +97,42 @@ std::vector<std::uint8_t> decode_texture_index_rle(const std::string& base64_dat
     return indices;
 }
 
+/// Decodes the `connectivity.data` "base64-rle6" format defined by
+/// `tools/extractor/maps/region.py`: a flat sequence of
+/// `(tile: 6 bytes, run_length: uint16 LE)` pairs, the 6 bytes matching
+/// `TileConnectivity` (trail/road/rail/canal/bridge/bridge_aux).
+/// Returns an all-default grid (`bridge == 0xff`, no networks) if `base64_data`
+/// is empty -- older extracted maps without this field.
+std::vector<TileConnectivity> decode_connectivity_rle(const std::string& base64_data, int width, int height) {
+    const std::size_t total = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    if (base64_data.empty()) {
+        return std::vector<TileConnectivity>(total, TileConnectivity{});
+    }
+
+    const std::vector<std::uint8_t> bytes = base64_decode(base64_data);
+    std::vector<TileConnectivity> out;
+    out.reserve(total);
+
+    for (std::size_t i = 0; i + 8 <= bytes.size() && out.size() < total; i += 8) {
+        TileConnectivity conn;
+        conn.trail      = bytes[i + 0];
+        conn.road       = bytes[i + 1];
+        conn.rail       = bytes[i + 2];
+        conn.canal      = bytes[i + 3];
+        conn.bridge     = bytes[i + 4];
+        conn.bridge_aux = bytes[i + 5];
+        const int run = bytes[i + 6] | (bytes[i + 7] << 8);
+        const std::size_t count = std::min<std::size_t>(static_cast<std::size_t>(run), total - out.size());
+        out.insert(out.end(), count, conn);
+    }
+
+    if (out.size() != total) {
+        throw std::runtime_error("decoded connectivity grid size (" + std::to_string(out.size()) +
+                                  ") != width*height (" + std::to_string(total) + ")");
+    }
+    return out;
+}
+
 /// Decodes the `heightmap.data` "raw-base64" format defined by
 /// `tools/extractor/maps/region.py`: the row-major `mapp.alti` byte grid,
 /// base64-encoded verbatim. Returns an all-zero grid if `base64_data` is empty.
@@ -135,7 +171,7 @@ Region Region::load(const std::filesystem::path& path) {
     region.terrain_ = decode_terrain_rle(map.terrain.data, map.width, map.height);
     region.heightmap_ = decode_heightmap(map.heightmap.data, map.width, map.height);
     region.texture_index_ = decode_texture_index_rle(map.texture_index.data, map.width, map.height);
-    region.connectivity_.assign(static_cast<std::size_t>(map.width) * map.height, TileConnectivity{});
+    region.connectivity_ = decode_connectivity_rle(map.connectivity.data, map.width, map.height);
     region.sea_level_ = region.heightmap_.empty()
                              ? 0
                              : *std::min_element(region.heightmap_.begin(), region.heightmap_.end());

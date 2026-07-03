@@ -119,6 +119,20 @@ inline void from_json(const nlohmann::json& j, TextureIndexData& t) {
     t.data = j.value("data", "");
 }
 
+/// Per-tile network-connectivity grid: "base64-rle6" -- a flat sequence of
+/// `(tile: 6 bytes, run_length: uint16 LE)` pairs, the 6 bytes matching
+/// `world::TileConnectivity` (trail/road/rail/canal/bridge/bridge_aux).
+/// Seeded from authored `mapp.path`/`mapp.brid` (see region.h / Round 23).
+struct ConnectivityData {
+    std::string encoding;
+    std::string data;
+};
+
+inline void from_json(const nlohmann::json& j, ConnectivityData& c) {
+    c.encoding = j.value("encoding", "");
+    c.data = j.value("data", "");
+}
+
 /// Mirrors the full `maps/<id>.json` document.
 struct MapFile {
     std::string id;
@@ -130,6 +144,7 @@ struct MapFile {
     TerrainData terrain;
     HeightmapData heightmap;
     TextureIndexData texture_index;
+    ConnectivityData connectivity;
     std::vector<MapRegion> regions;
     std::vector<Decoration> decorations;
     std::vector<City> cities;
@@ -149,6 +164,9 @@ inline void from_json(const nlohmann::json& j, MapFile& m) {
     }
     if (j.contains("texture_index")) {
         j.at("texture_index").get_to(m.texture_index);
+    }
+    if (j.contains("connectivity")) {
+        j.at("connectivity").get_to(m.connectivity);
     }
     m.regions = j.value("regions", std::vector<MapRegion>{});
     m.decorations = j.value("decorations", std::vector<Decoration>{});

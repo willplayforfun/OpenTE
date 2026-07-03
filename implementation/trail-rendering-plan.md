@@ -1,5 +1,14 @@
 # Trail Segment Rendering Plan
 
+> **STATUS (2026-07-02): COMPLETE.** All phases implemented; trail, road,
+> rail, and canal render from the correct atlas cells. Late corrections
+> this plan predates (see `documentation/extracted/path-rendering-handoff.md`
+> §0): (1) trail is the LOW-nibble network and road the HIGH nibble; (2)
+> connectivity byte 2 = RAIL (the 41-code accumulated-LUT network, page
+> 0xf6) and byte 3 = CANAL (the 33-code 8-directional network, page 0xfa)
+> — this plan's byte names for those two networks are reversed throughout.
+> Bridges are planned separately in `bridge-plan.md`.
+
 This plan covers **Stage D** of the terrain pipeline — the decal pass that draws
 trail, road, rail, and canal segments over the blended terrain mesh.  Stages A–C
 and E are already implemented in `TerrainRenderer`; this plan picks up where
@@ -447,8 +456,9 @@ now unblocked.  The LUT arrays can be copied directly from
 ## Deferred / out of scope
 
 - **Bridge rendering** (`terr_brid_*`, `terr_rbrd_*`): bridges are sprites
-  placed at specific waypoints, not tile overlays.  Separate feature, separate
-  plan.
+  placed at specific waypoints, not tile overlays.  Separate feature — see
+  `bridge-plan.md` (canal sea-mouth decals + bridge decal suppression are
+  done; the sprite pass and construction auto-bridging remain).
 - **Canal water animation**: canal cells in the game animate.  Deferred until
   the animation system exists.
 - **Multi-network overlap on a single tile**: the current render call draws

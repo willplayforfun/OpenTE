@@ -12,27 +12,48 @@
 
 namespace opente::world {
 
-/// Per-tile network connectivity mask decoded from the Stage D pass.
-/// Matches the 6-byte structure produced by ConnectivityHashTable::Lookup
-/// in the original EXE -- see documentation/extracted/exe_trail_re_findings.md.
+/// Per-tile network connectivity mask -- the 6-byte record served by the
+/// original engine's ConnectivityHashTable::Lookup (EXE 0x463a80). Byte
+/// semantics per documentation/extracted/exe_trail_re_findings.md (§0
+/// corrections are authoritative; some older tables in that doc still use
+/// the first-pass byte names, which had trail/road AND rail/canal reversed).
+///
+/// Direction bits, clockwise from NW: 0x01=NW, 0x02=N, 0x04=NE, 0x08=E,
+/// 0x10=SE, 0x20=S, 0x40=SW, 0x80=W. Trail/road/rail are CARDINAL-ONLY
+/// (odd bits; a diagonal route is a staircase of cardinal segments). Canal
+/// is the only 8-directional network: a diagonal canal connection is its
+/// diagonal bit PLUS both flanking cardinal bits (NE = 0x04|0x02|0x08 =
+/// 0x0e), because a diagonal canal run is a two-tile-wide BRAID -- the
+/// tiles flanking each step's shared corner carry corner-bend channel
+/// pieces (see exe_trail_re_findings.md §0 corrections 12-13).
 struct TileConnectivity {
-    std::uint8_t road       = 0;  // [ebp-0x20]: bits 0x02/0x08/0x20/0x80 = N/E/S/W road
-    std::uint8_t trail_extra = 0; // [ebp-0x1f]: same bits, road upgraded to trail here
-    std::uint8_t canal_dir  = 0;  // [ebp-0x1e]: cardinal canal directions (same bit positions)
-    std::uint8_t rail       = 0;  // [ebp-0x1d]: opaque 8-bit rail connectivity key
-    std::uint8_t canal      = 0;  // [ebp-0x1c]: 0 = canal tile, 0xff = no canal
-    std::uint8_t reserved   = 0;  // [ebp-0x1b]: unknown/unused
+    std::uint8_t trail  = 0;    // byte 0: trail connections (low nibble of the decal LUT code)
+    std::uint8_t road   = 0;    // byte 1: road connections (high nibble; a road replaces the
+                                //         trail decal per-direction -- roads are the "upgrade")
+    std::uint8_t rail   = 0;    // byte 2: rail connections (cardinal-only; shares the decal
+                                //         LUT code space with trail/road -> level-crossing cells)
+    std::uint8_t canal  = 0;    // byte 3: canal connections (8-directional, see encoding above;
+                                //         canal endpoints at shore-water draw sea-mouth cells)
+    std::uint8_t bridge = 0xff; // byte 4: 0xff = no bridge; any other value marks a bridge tile,
+                                //         which SUPPRESSES the tile's network decal (the bridge
+                                //         visual is a separate sprite, not a Stage-D decal).
+                                //         MUST default to 0xff -- a 0 default would flag every
+                                //         tile as a bridge and hide all trail/road/rail decals.
+    std::uint8_t bridge_aux = 0; // byte 5: second mapp.brid byte; feeds the same suppression
+                                 //         test as `bridge` (exact meaning not yet decoded)
 };
 
 /// Small terrain-type enum (world-and-maps.md).
 /// Values are the bytes stored in `terrain.data` after RLE decoding -- see
 /// `tools/extractor/maps/region.py`'s `_TERRAIN_TYPES` (must stay in sync).
 ///
-/// ShallowWater is reserved; the band->type mapping for it is unresolved
-/// (spec-deviations.md #8) and the extractor does not emit it yet.
+/// DeepWater/ShallowWater are derived from the tile's texture page
+/// (`mapp.terr` low nibble: page 1 = deep, page 2 = seas/shallow), so they
+/// agree with the renderer's `texture_index <= 2` water test. Buildable vs
+/// Impassable is still a coarse band placeholder (spec-deviations.md #8).
 enum class TerrainType : std::uint8_t {
     DeepWater    = 0,
-    ShallowWater = 1,  // reserved -- not yet emitted by the extractor
+    ShallowWater = 1,
     Buildable    = 2,
     Impassable   = 3,
 };
@@ -68,7 +89,9 @@ public:
 
     /// Returns the network connectivity mask at tile `(tx, ty)`.
     /// `tx`/`ty` must be in `[0, width)` / `[0, height)`.
-    /// All bytes are zero until connectivity data is loaded from entity/save state.
+    /// Seeded at load from the map's authored `mapp.path`/`mapp.brid` arrays
+    /// (see `maps/<id>.json` `connectivity`); tiles with no authored network
+    /// keep the default mask (`bridge == 0xff`, all other bytes 0).
     const TileConnectivity& connectivity_at(int tx, int ty) const {
         return connectivity_[static_cast<std::size_t>(ty) * width_ + tx];
     }
@@ -88,7 +111,7 @@ private:
     std::vector<TerrainType> terrain_;  // row-major, width_ * height_
     std::vector<std::uint8_t> heightmap_;  // row-major, width_ * height_ (raw `mapp.alti` bytes)
     std::vector<std::uint8_t> texture_index_;     // row-major, width_ * height_, values 1-13
-    std::vector<TileConnectivity> connectivity_;  // row-major, width_ * height_ (zero-initialized; populated by entity load)
+    std::vector<TileConnectivity> connectivity_;  // row-major, width_ * height_ (seeded from authored mapp.path/mapp.brid)
     std::uint8_t sea_level_ = 0;
     std::vector<MapRegion> regions_;
     std::vector<Decoration> decorations_;

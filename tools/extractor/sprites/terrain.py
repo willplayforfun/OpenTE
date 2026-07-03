@@ -146,7 +146,8 @@ _SHORE_ATLAS_TAGS = {
 # Network-overlay atlas sub-tags per base culture (Stage D, trail-rendering-plan.md).
 # Container layout: terr/trai/<subtag>, terr/cana/<subtag>, terr/rail/<subtag>.
 # trail1/trail2 are the two 53-cell atlas pages for roads+trails (atlas pages 0xf4/0xf5).
-# canal is the single canal atlas (page 0xf6), rail the single rail atlas (page 0xfa).
+# rail is page 0xf6 (drawn by the byte-2 connectivity network), canal page 0xfa
+# (byte-3 network) -- see documentation/extracted/path-rendering-handoff.md §0.
 _NETWORK_ATLAS_SUBTAGS: dict[str, dict[str, str]] = {
     "chi1": {"trail1": "chi1", "trail2": "chi2", "canal": "chi1", "rail": "chi1"},
     "eur1": {"trail1": "eur1", "trail2": "eur2", "canal": "eur1", "rail": "eur1"},

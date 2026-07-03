@@ -109,6 +109,14 @@ building, see it deduct cost from a visible treasury number.
 
 **Goal**: drag out roads/trails and see the connectivity grid update.
 
+> **Status 2026-07-02**: rendering is DONE and faithful for all four
+> networks (Stage-D decals with the EXE's LUTs; authored `mapp.path`/
+> `mapp.brid` load; drag *preview* works; canal sea-mouth cells and
+> bridge-tile decal suppression implemented — see `trail-rendering-plan.md`
+> and `bridge-plan.md`). Still missing from this stage: pathway COMMIT
+> (mutating `Region::connectivity_`), and the auto-bridge construction
+> rules (bridge-plan.md WP3/WP6).
+
 - Implement the connectivity grid + "can network N step here" rule
   ([world-and-maps.md](../spec/world-and-maps.md)).
 - Implement pathway drag-out UX ([input.md](../spec/input.md)) with the

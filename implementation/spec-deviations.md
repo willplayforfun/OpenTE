@@ -153,17 +153,26 @@ algorithm being skipped), but still worth attention since some are core
 ### 8. Terrain band → terrain-type mapping
 
 - **Spec**: [world-and-maps.md](../spec/world-and-maps.md) terrain section
-- **What the spec says**: The 4 `mapp.terr` bands are confirmed real
-  groupings, but what each band *represents* (water, plains, hills,
-  mountains, desert) hasn't been cross-referenced against the texture-
-  selection system. The current `{water, plains, hills, mountains}` mapping
-  is a guess.
-- **What's needed**: Cross-reference the bands against the `terr/sets`
-  texture palette system (already decoded — 18 palette records, texture
-  indices 1-13) and/or the buildability allowlist in the placement code.
-- **Impact**: A wrong mapping misclassifies entire terrain categories,
-  affecting buildability, connectivity, and visual presentation.
-- **Status**: **Open**.
+- **Resolved (water)**: Water vs land is now keyed off the `mapp.terr`
+  texture page (low nibble) rather than the band: page 1 = `deep` →
+  `DeepWater`, page 2 = `seas` → `ShallowWater`. This was cross-referenced
+  against the `terr/sets` palette slot order (slot 1=deep, 2=seas) and
+  altitude data (every page-2 tile sits at water level), and it agrees with
+  the renderer's own `texture_index <= 2` water test. The extractor now emits
+  `ShallowWater` (`tools/extractor/maps/region.py` `_terrain_type_for_value`).
+  This also fixed the spurious map-edge coastline: band-shifted shallow-water
+  bytes (e.g. `0x22`) were previously classified `Buildable`, so the shore
+  overlay's `terrain_at` self-gate didn't skip them and drew coast against
+  their seas neighbors.
+- **Still open (land split)**: Among land pages (3-13), the buildable vs
+  impassable split is still a coarse band placeholder — the top band
+  (high_nibble=6, bytes 96-102) is treated as impassable, everything else
+  buildable. This hasn't been cross-referenced against the placement code's
+  buildability allowlist.
+- **Impact**: A wrong land split misclassifies buildability for high-band
+  tiles; water classification is now believed correct.
+- **Status**: **Partially resolved** — water done; land buildable/impassable
+  split still a guess.
 
 ### 9. Pre-existing trail connectivity at map load
 
@@ -175,12 +184,15 @@ algorithm being skipped), but still worth attention since some are core
   `path`/`brid` record get defaults (land networks unbuildable until a player
   builds, deep water freely navigable). The map data format for these arrays
   (`{x, y, flags}` records) is decoded.
-- **What the spec is still missing**: The extractor doesn't yet emit these
-  arrays, and the spec's `paths[]`/`bridges[]` schema for the map JSON isn't
-  finalized. This is an extraction/wiring task more than an RE task.
-- **Impact**: Maps with pre-existing infrastructure (some episodes have
-  pre-built roads) won't load correctly without this.
-- **Status**: **Open** — data format known, extraction not yet wired.
+- **What the spec is still missing**: nothing — the spec's connectivity
+  section was rewritten (2026-07-02) to the decoded ground truth and the
+  implemented `connectivity` RLE-grid schema.
+- **Impact**: none remaining for load-time data. (The bridge *visual* — a
+  separate sprite pass — and construction auto-bridging are still open;
+  see [bridge-plan.md](bridge-plan.md).)
+- **Status**: **Resolved** — extractor emits the grid (`mapp.path`
+  overwrite + `mapp.brid` bytes-4/5 overwrite, matching the EXE loader at
+  `0x461c8e`/`0x461dad`), `Region` loads it, Stage-D renders from it.
 
 ---
 

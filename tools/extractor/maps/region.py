@@ -5,12 +5,13 @@ See `OpenTE/spec/world-and-maps.md` ("Map data") for the target schema and
 
 Two things this module decodes that aren't pinned down by the spec yet:
 
-- **Terrain band -> clone terrain-type mapping** (`_TERRAIN_TYPES` /
-  `_terrain_type_for_band`): the original `mapp.terr` grid uses ~17-19 raw
-  byte values clustered into bands (observed on `ep01 China`: 2, 4-8, 33-40,
-  64-70, 96-102). Per `world-and-maps.md`'s "Open questions", this is a
-  coarse placeholder mapping (band -> one of the clone's small terrain-type
-  enum values) until the original's per-value semantics are decoded.
+- **`mapp.terr` -> clone terrain-type mapping** (`_TERRAIN_TYPES` /
+  `_terrain_type_for_value`): each byte packs (high_nibble=band,
+  low_nibble=texture_page). Water vs land is keyed off the texture page
+  (page 1 = `deep` -> deep_water, page 2 = `seas` -> shallow_water), matching
+  the renderer's `own_index <= 2` water test and altitude data. The land
+  buildable/impassable split (pages 3-13) is still a coarse band placeholder
+  (top band -> impassable) pending spec-deviations #8.
 - **`terrain.data` "base64-rle" encoding** (`_encode_terrain_rle`): not
   specified byte-for-byte by `world-and-maps.md`, so this module defines it
   as a flat sequence of `(type_byte: uint8, run_length: uint16 LE)` pairs
@@ -20,6 +21,15 @@ Two things this module decodes that aren't pinned down by the spec yet:
   verbatim with no transformation -- see
   `documentation/08-investigation-needed.md` B15 for the heightfield
   validation and the `alti_byte * 10.0 / 256.0` world-height formula.
+- **`connectivity.data` "base64-rle6" encoding** (`_decode_path_brid` /
+  `_encode_connectivity_rle`): the per-tile 6-byte network-connectivity mask
+  (trail/road/rail/canal/bridge/bridge_aux -- matching C++
+  `world::TileConnectivity`), seeded from the map's authored `mapp.path` and
+  `mapp.brid` record arrays exactly as `SilkRoadMap::Load` does
+  (`documentation/03-exe-analysis.md` Round 23). Tiles not covered by a
+  `path`/`brid` record keep the engine's default-on-miss mask
+  `{0,0,0,0,0xff,0}` (no networks; `bridge == 0xff` means "no bridge").
+  RLE-encoded as `(tile: 6 bytes, run_length: uint16 LE)` pairs.
 """
 from __future__ import annotations
 
@@ -35,32 +45,49 @@ from ..containers.record import Field, parse_record
 # world/region.h's TerrainType enum.
 _TERRAIN_TYPES = [
     "deep_water",
-    "shallow_water",  # reserved -- not yet emitted (band->type mapping unresolved, spec-deviations #8)
+    "shallow_water",
     "buildable",
     "impassable",
 ]
 
-# Coarse mapping from `mapp.terr` raw byte value to an index into
-# `_TERRAIN_TYPES`, based on the band boundaries observed on `ep01 China`
-# (2, 4-8, 33-40, 64-70, 96-102) -- see module docstring.
-# `mapp.terr` bytes pack (high_nibble=terrain_band, low_nibble=texture_page);
-# four high-nibble values appear: 0 (water band), 2, 4, 6 (land bands).
+# `mapp.terr` bytes pack (high_nibble=terrain_band, low_nibble=texture_page).
+# Observed values on `ep01 China`: 2, 4-8, 33-40, 64-70, 96-102 -- four
+# high-nibble bands (0, 2, 4, 6) crossed with texture pages 1-8.
 _DEEP_WATER = _TERRAIN_TYPES.index("deep_water")
+_SHALLOW_WATER = _TERRAIN_TYPES.index("shallow_water")
 _BUILDABLE = _TERRAIN_TYPES.index("buildable")
 _IMPASSABLE = _TERRAIN_TYPES.index("impassable")
 
 
-def _terrain_type_for_band(value: int) -> int:
-    # Threshold <=15 captures the entire first band (high_nibble==0, values
-    # 2-8 in practice).  The previous threshold of <=2 incorrectly mapped
-    # values 3-8 (still part of the water band) to buildable land.
-    if value <= 15:
+def _texture_page(value: int) -> int:
+    """Texture-page index (1-13) for a `mapp.terr` byte = its low nibble,
+    indexing `tables/terrain_textures.json` (B15 Round 35/36,
+    terrain-blending-plan.md Stage A.1). Page 1 = `deep`, page 2 = `seas`,
+    pages 3-13 = land textures (terr/sets palette slot order,
+    data_catalog_terr_sets.txt). 0 / out-of-range clamp to 1 (the round's
+    notes say those shouldn't occur but it isn't exhaustively verified)."""
+    page = value & 0xF
+    return page if 1 <= page <= 13 else 1
+
+
+def _terrain_type_for_value(value: int) -> int:
+    # Water vs land is decided by the texture PAGE (low nibble), not the band
+    # (high nibble): page 1 = `deep` (deep water), page 2 = `seas` (shallow
+    # water). This matches the renderer's own water test (`own_index <= 2` in
+    # terrain_renderer.cpp) and is altitude-consistent (every page-2 tile sits
+    # at water level, including band-shifted bytes like 0x22 that the old
+    # band-only rule misclassified as buildable land -- the source of the
+    # spurious map-edge coastline).
+    page = _texture_page(value)
+    if page == 1:
         return _DEEP_WATER
-    # Bands 33-40 (high_nibble=2) and 64-70 (high_nibble=4) are buildable land.
+    if page == 2:
+        return _SHALLOW_WATER
+    # Land pages (3-13). Buildable vs impassable is still a coarse band
+    # (high-nibble) placeholder pending spec-deviations #8: the top band
+    # (bytes 96-102, high_nibble=6) is treated as impassable, the rest buildable.
     if value <= 95:
         return _BUILDABLE
-    # Band 96-102 (high_nibble=6) is the highest terrain; treated as impassable
-    # pending RE confirmation of the band->gameplay-category mapping.
     return _IMPASSABLE
 
 
@@ -80,6 +107,83 @@ def _encode_terrain_rle(terrain_types: bytes) -> str:
         while i + run < n and terrain_types[i + run] == value and run < 0xFFFF:
             run += 1
         chunks.append(value)
+        chunks += struct.pack("<H", run)
+        i += run
+    return base64.b64encode(bytes(chunks)).decode("ascii")
+
+
+# Engine default-on-miss connectivity mask (Round 16): no trail/road/canal/rail,
+# `bridge == 0xff` ("no bridge" sentinel -- MUST be 0xff, see world::TileConnectivity).
+_CONN_DEFAULT = bytes((0, 0, 0, 0, 0xFF, 0))
+
+
+def _decode_path_brid(
+    map_data: bytes, header_off: int, mapp_fields: dict[str, Field], width: int, height: int
+) -> bytes:
+    """Builds the row-major per-tile 6-byte connectivity grid from
+    `mapp.path` / `mapp.brid`, mirroring `SilkRoadMap::Load`
+    (`documentation/03-exe-analysis.md` Round 23).
+
+    Both arrays are `0x40` reference fields holding back-to-back
+    `{x:int16, y:int16, flags:uint32}` (8-byte) elements:
+
+    - **path** -- *overwrites* the tile's mask with
+      `trail=flags>>24`, `road=(flags>>16)&0xff`, `rail=(flags>>8)&0xff`,
+      `canal=0`, `bridge=0xff`, `bridge_aux=0`.
+    - **brid** -- *overwrites* bytes 4/5 of the tile's current mask
+      (preserving any path data in bytes 0-3): `bridge = flags & 0xff`,
+      `bridge_aux = (flags >> 8) & 0xff`. Confirmed plain `mov`s at EXE
+      0x461df8/0x461dfb -- an earlier RE pass (Round 23) misread these as
+      ORs, which would have made brid records a no-op against the 0xff
+      default. A bridge tile (`bridge != 0xff`) suppresses the Stage-D
+      network decal; the bridge visual is a separate sprite.
+
+    Tiles with no record keep `_CONN_DEFAULT`.
+    """
+    total = width * height
+    grid = bytearray(_CONN_DEFAULT * total)
+
+    def _elems(field: Field | None):
+        if field is None or field.size <= 0:
+            return
+        base = header_off + field.raw_rel
+        if base < 0 or base + field.size > len(map_data):
+            return
+        for i in range(field.size // 8):
+            x, y, flags = struct.unpack_from("<hhI", map_data, base + i * 8)
+            if 0 <= x < width and 0 <= y < height:
+                yield (y * width + x) * 6, flags
+
+    for off, flags in _elems(mapp_fields.get("path")):
+        grid[off + 0] = (flags >> 24) & 0xFF  # trail
+        grid[off + 1] = (flags >> 16) & 0xFF  # road
+        grid[off + 2] = (flags >> 8) & 0xFF   # rail
+        grid[off + 3] = 0                      # canal
+        grid[off + 4] = 0xFF                   # bridge ("no bridge" sentinel)
+        grid[off + 5] = 0                      # bridge_aux
+
+    for off, flags in _elems(mapp_fields.get("brid")):
+        grid[off + 4] = flags & 0xFF           # bridge
+        grid[off + 5] = (flags >> 8) & 0xFF    # bridge_aux
+
+    return bytes(grid)
+
+
+def _encode_connectivity_rle(grid: bytes) -> str:
+    """RLE-encodes the 6-byte-per-tile connectivity grid as base64.
+
+    Format: a flat sequence of `(tile: 6 bytes, run_length: uint16 LE)` pairs;
+    consecutive identical tiles are merged into one run (max run 0xFFFF).
+    """
+    chunks = bytearray()
+    n = len(grid) // 6
+    i = 0
+    while i < n:
+        tile = grid[i * 6:(i + 1) * 6]
+        run = 1
+        while i + run < n and grid[(i + run) * 6:(i + run + 1) * 6] == tile and run < 0xFFFF:
+            run += 1
+        chunks += tile
         chunks += struct.pack("<H", run)
         i += run
     return base64.b64encode(bytes(chunks)).decode("ascii")
@@ -167,18 +271,22 @@ def extract_map(
     terr_field = mapp_fields["terr"]
     terr_off = mapp_entry.dir.offset + terr_field.raw_rel
     raw_terrain = map_data[terr_off:terr_off + terr_field.size]
-    terrain_types = bytes(_terrain_type_for_band(v) for v in raw_terrain)
+    terrain_types = bytes(_terrain_type_for_value(v) for v in raw_terrain)
 
     # Per-tile texture-page index (B15 Round 35/36, terrain-blending-plan.md
     # Stage A.1): low nibble of `mapp.terr`, 1-13 indexes
-    # `tables/terrain_textures.json`. Clamp out-of-range values to 1 (the
-    # round's notes say 0/>13 shouldn't occur but this hasn't been
-    # exhaustively verified across all maps).
-    texture_indices = bytes((v & 0xF) if 1 <= (v & 0xF) <= 13 else 1 for v in raw_terrain)
+    # `tables/terrain_textures.json`. Shares `_texture_page` with the
+    # terrain-type classifier so `terrain.data` and `texture_index.data` stay
+    # consistent (water classification derives from this same page).
+    texture_indices = bytes(_texture_page(v) for v in raw_terrain)
 
     alti_field = mapp_fields["alti"]
     alti_off = mapp_entry.dir.offset + alti_field.raw_rel
     raw_alti = map_data[alti_off:alti_off + alti_field.size]
+
+    # Per-tile network connectivity, seeded from authored `mapp.path`/`mapp.brid`
+    # (03-exe-analysis.md Round 23). 6 bytes/tile matching world::TileConnectivity.
+    connectivity_grid = _decode_path_brid(map_data, mapp_entry.dir.offset, mapp_fields, width, height)
 
     elem_entry = find_child(map_root, "elem")
     if elem_entry is None or elem_entry.dir is None:
@@ -273,6 +381,10 @@ def extract_map(
         "texture_index": {
             "encoding": "base64-rle",
             "data": _encode_terrain_rle(texture_indices),
+        },
+        "connectivity": {
+            "encoding": "base64-rle6",
+            "data": _encode_connectivity_rle(connectivity_grid),
         },
         "regions": regions,
         "decorations": decorations,
