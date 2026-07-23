@@ -23,6 +23,10 @@ constexpr float kZoomStep = 0.1f;
 
 constexpr const char* kDecorationSpritePrefix = "flor.";
 
+// Bridge deck sprite id prefixes (bridge-plan WP4/WP5): road/trail decks
+// (`terr/brid`) and rail decks (`terr/rbrd`), keyed by variant id.
+constexpr const char* kBridgeSpritePrefixes[] = {"terrain.brid.", "terrain.rbrd."};
+
 constexpr const char* kConsSpriteIds[] = {
     "ui.a_ui.cons.back",
     "ui.a_ui.cons.sele",
@@ -237,6 +241,19 @@ void GameplayScene::load_sprites() {
             continue;
         }
 
+        bool is_bridge = false;
+        for (const char* prefix : kBridgeSpritePrefixes) {
+            if (sprite.id.rfind(prefix, 0) == 0) { is_bridge = true; break; }
+        }
+        if (is_bridge) {
+            AnchoredSprite anchored;
+            anchored.texture = render::Texture::load(renderer_, game_data_dir / sprite.file);
+            anchored.anchor_x = static_cast<float>(sprite.anchor_x);
+            anchored.anchor_y = static_cast<float>(sprite.anchor_y);
+            bridge_sprites_.emplace(sprite.id, std::move(anchored));
+            continue;
+        }
+
         for (const char* ui_id : kConsSpriteIds) {
             if (sprite.id == ui_id) {
                 ui_textures_.emplace(sprite.id,
@@ -437,6 +454,7 @@ void GameplayScene::render() {
     if (world_) {
         active_terrain_renderer()->render(camera_);
         render_construction_overlays();  // after terrain, before buildings/decorations
+        render_bridges();                // deck sprites over water (terrain suppresses their decal)
         render_decorations();
         render_buildings();
     }
@@ -466,6 +484,72 @@ void GameplayScene::render_decorations() {
             static_cast<float>(dec.x), static_cast<float>(dec.y));
         world_pos.y -= tr->sample_height(dec.x, dec.y)
                        * render::kPixelsPerAltiUnit;
+        const render::Vec2 screen_pos = camera_.world_to_screen(world_pos);
+
+        const float w = spr.texture.width()  * camera_.zoom;
+        const float h = spr.texture.height() * camera_.zoom;
+        const SDL_FRect dest{
+            screen_pos.x + spr.anchor_x * camera_.zoom,
+            screen_pos.y + spr.anchor_y * camera_.zoom, w, h};
+        SDL_RenderCopyF(renderer_, spr.texture.handle(), nullptr, &dest);
+    }
+}
+
+void GameplayScene::render_bridges() {
+    if (bridge_sprites_.empty()) return;
+    const world::Region& reg = world_->region(active_region_index_);
+
+    // Bridge variant id = pack4(first-non-empty network's cardinal dirs) +
+    // bridge_aux -- exactly the value the Stage-D decal suppression computes
+    // (terrain_renderer.cpp draw_network_conn) and the extractor tags each
+    // deck leaf with (bridge-plan WP1/WP2). rail present -> rail deck (rbrd),
+    // else road/trail deck (brid).
+    auto extract4 = [](std::uint8_t raw) -> std::uint8_t {
+        return static_cast<std::uint8_t>(((raw >> 1) & 0x01u) |
+                                         ((raw >> 2) & 0x02u) |
+                                         ((raw >> 3) & 0x04u) |
+                                         ((raw >> 4) & 0x08u));
+    };
+
+    // Gather bridge tiles, then draw back-to-front in isometric depth order so
+    // overlapping multi-tile deck spans layer correctly (WP2 sort key ~ tx+ty).
+    struct BridgeDraw { int tx; int ty; float elevation; const AnchoredSprite* spr; };
+    std::vector<BridgeDraw> draws;
+    for (int ty = 0; ty < reg.height(); ++ty) {
+        for (int tx = 0; tx < reg.width(); ++tx) {
+            const world::TileConnectivity& conn = reg.connectivity_at(tx, ty);
+            if (conn.bridge == 0xff) continue;  // 0xff = no bridge on this tile
+            const std::uint8_t dirs = conn.trail ? conn.trail
+                                    : conn.road  ? conn.road
+                                                 : conn.rail;
+            const int variant = extract4(dirs) + conn.bridge_aux;
+            if (variant == 0) continue;  // no deck (also un-suppresses the decal)
+            const char* set = conn.rail ? "rbrd" : "brid";
+            const std::string id =
+                "terrain." + std::string(set) + "." + std::to_string(variant);
+            const auto it = bridge_sprites_.find(id);
+            if (it == bridge_sprites_.end() || !it->second.texture.valid()) continue;
+            // A bridge is a rigid, LEVEL object: its elevation comes from the
+            // mask's byte-4 depth, NOT the per-tile terrain height. The EXE
+            // treats the depth byte exactly as an alti byte (WP1: elevation =
+            // depth * (region+0x38 = 10) / 256, the same conversion terrain
+            // height uses -- 03-exe-analysis.md Round 43 / line 2174), so the
+            // deck y-offset is `depth * kPixelsPerAltiUnit`. Depth is constant
+            // across a bridge's tiles, so the span stays flat -- sampling the
+            // terrain height per tile instead would step each deck sprite by
+            // the local slope and leave 1px seams at the joins.
+            draws.push_back({tx, ty, static_cast<float>(conn.bridge), &it->second});
+        }
+    }
+    std::sort(draws.begin(), draws.end(), [](const BridgeDraw& a, const BridgeDraw& b) {
+        return (a.tx + a.ty) < (b.tx + b.ty);
+    });
+
+    for (const BridgeDraw& d : draws) {
+        const AnchoredSprite& spr = *d.spr;
+        render::Vec2 world_pos = render::tile_to_world(
+            static_cast<float>(d.tx), static_cast<float>(d.ty));
+        world_pos.y -= d.elevation * render::kPixelsPerAltiUnit;
         const render::Vec2 screen_pos = camera_.world_to_screen(world_pos);
 
         const float w = spr.texture.width()  * camera_.zoom;

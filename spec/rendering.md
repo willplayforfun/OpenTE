@@ -204,6 +204,26 @@ and `color.a` differ per pass):
   extraction is in `OpenTE/tools/extractor/sprites/terrain.py`
   (`_NETWORK_ATLAS_SUBTAGS`).
   See `documentation/extracted/exe_trail_re_findings.md` for full RE detail.
+- **Bridge decks**: bridges are *sprites*, not tile decals — a bridge tile
+  (`bridge != 0xff`) suppresses its network decal (above) and a separate
+  billboard pass draws the deck. **Implemented** in
+  `GameplayScene::render_bridges()`, which runs after the terrain and
+  construction overlays but before decorations/buildings (the deck sorts one
+  tile-sum behind entities, so units read as crossing *over* it). Per tile:
+  `variant = pack4(cardinal dirs of the first non-empty network,
+  trail→road→rail) + bridge_aux` — bit-identical to the decal-suppression
+  value — and `rail != 0` picks the rail deck set, else the road/trail set;
+  the sprite id is `terrain.brid.<variant>` / `terrain.rbrd.<variant>`.
+  Each deck's **elevation is the mask's byte-4 depth**, not the per-tile
+  terrain height: the EXE treats that byte exactly as an alti byte
+  (`depth × 10 / 256`, the same conversion as terrain height), and because
+  depth is constant across a bridge's tiles the span stays level. Sampling
+  terrain height per tile instead steps each deck sprite by the local slope
+  and leaves visible 1px seams at the joins. Tiles are painter-sorted
+  back-to-front by `tx+ty` so multi-tile spans layer correctly. Deck sprite
+  extraction is in `sprites/terrain.py` (`extract_bridge_sprites`). See
+  [`OpenTE/implementation/bridge-plan.md`](../implementation/bridge-plan.md)
+  for the full RE + work-package history.
 
 A detailed, staged implementation plan — including the per-tile
 texture-page data model, palette/atlas extraction, and open

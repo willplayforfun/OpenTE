@@ -763,9 +763,10 @@ void TerrainRenderer::draw_network_conn(const world::TileConnectivity& conn,
     }
 
     // Bridge tiles draw no trail/road/rail decal (EXE 0x46c082-0x46c0e0):
-    // the bridge visual is a separate sprite pass (not yet implemented, see
-    // implementation/bridge-plan.md), so Stage D must not draw the network
-    // segment underneath it.
+    // the bridge visual is a separate sprite pass (GameplayScene::render_bridges,
+    // bridge-plan.md WP5), so Stage D must not draw the network segment
+    // underneath it. The suppression value computed here is the SAME number the
+    // deck sprite's variant id uses -- keep the two in sync.
     if (conn.bridge != 0xff) {
         const std::uint8_t dirs = conn.trail ? conn.trail
                                  : conn.road ? conn.road

@@ -187,9 +187,10 @@ algorithm being skipped), but still worth attention since some are core
 - **What the spec is still missing**: nothing — the spec's connectivity
   section was rewritten (2026-07-02) to the decoded ground truth and the
   implemented `connectivity` RLE-grid schema.
-- **Impact**: none remaining for load-time data. (The bridge *visual* — a
-  separate sprite pass — and construction auto-bridging are still open;
-  see [bridge-plan.md](bridge-plan.md).)
+- **Impact**: none remaining for load-time data. The bridge *visual* (a
+  separate sprite pass) is now implemented too — see
+  [bridge-plan.md](bridge-plan.md) WP4/WP5. Construction auto-bridging
+  (WP3/WP6) is still open.
 - **Status**: **Resolved** — extractor emits the grid (`mapp.path`
   overwrite + `mapp.brid` bytes-4/5 overwrite, matching the EXE loader at
   `0x461c8e`/`0x461dad`), `Region` loads it, Stage-D renders from it.

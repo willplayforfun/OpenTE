@@ -30,7 +30,7 @@ from .sprites.buildings import find_building_sprite_path
 from .sprites.decorations import extract_decoration_sprites
 from .sprites.font import extract_fonts
 from .sprites.sprite import decode_sprite, find_leaf, write_png_rgba
-from .sprites.terrain import extract_terrain_textures_all_cultures
+from .sprites.terrain import extract_bridge_sprites, extract_terrain_textures_all_cultures
 from .sprites.ui import extract_ui_sprites, extract_main_menu_sprites
 from .tables.abilities import extract_abilities
 from .tables.bandits import extract_bandits
@@ -264,6 +264,12 @@ def run(game_dir: GameDirectory, output_dir: Path) -> None:
     sprite_entries += terrain_entries
     table_entries.append(TableEntry(id="terrain_textures", file="tables/terrain_textures.json"))
     print(f"  {len(terrain_entries)} terrain sprites written")
+
+    print("Extracting bridge sprites...")
+    bridge_entries = extract_bridge_sprites(m_ui_data, m_ui_root, output_dir)
+    sprite_entries += bridge_entries
+    table_entries.append(TableEntry(id="bridges", file="tables/bridges.json"))
+    print(f"  {len(bridge_entries)} bridge sprites written")
 
     print("Extracting decoration sprites...")
     flor_data, flor_footer = load(game_dir.data_dir / "flor.{}")

@@ -10,18 +10,21 @@ Atlas format notes
 ------------------
 Each face/size has four leaves, in order: ``[atlas, metrics, cmap, big]``.
 
-* **Atlas leaf** (``bg6a``, ``field3 == 7`` = 8bpp grayscale): a 32-byte
-  ``bg6a`` header (8 × int32: magic, version, str_rel, field3, width, height,
-  off_x, off_y), then a **fixed 516-byte sub-header**, then ``width * height``
-  raw pixel bytes (row-major, top-down).  Pixel values are in ``[0, 8]`` and
-  scale to SDL alpha via ``alpha = min(255, value * 32)``.
+* **Atlas leaf** (``bg6a``, ``field3 == 7`` = 8bpp grayscale): a 36-byte
+  ``bg6a`` header (9 × int32: magic, version, str_rel, field3, width, height,
+  off_x, off_y, dword9 — the 9th dword at ``+0x20``, read by the engine only
+  for odd-``field3`` formats), then a **fixed 512-byte sub-header**, then
+  ``width * height`` raw pixel bytes (row-major, top-down).  Pixel values are
+  in ``[0, 8]`` and scale to SDL alpha via ``alpha = min(255, value * 32)``.
 
-  IMPORTANT: the pixel data does NOT start immediately after the 32-byte
-  header — there are 516 bytes in between.  Reading from ``+32`` shifts every
-  row left by 516 px and scrambles the whole strip (this was the long-standing
-  "unintelligible fonts" bug).  We read the payload from the *end* of the leaf
-  (``abs_off + size - width*height``), which equals ``+32+516`` for every
-  observed atlas and is robust to any trailing slack.
+  IMPORTANT: the pixel data does NOT start immediately after the header —
+  there are 548 bytes (36-byte header + 512-byte sub-header) before the pixels.
+  Ordinary (non-font) bg6a sprites put pixels at ``+0x24`` (36); font atlases
+  have this extra sub-header, so reading from ``+36`` (or the old ``+32``)
+  shifts every row left and scrambles the whole strip (this was the
+  long-standing "unintelligible fonts" bug).  We read the payload from the
+  *end* of the leaf (``abs_off + size - width*height``), which equals ``+548``
+  for every observed atlas and is robust to any trailing slack.
 
   The strip is a single ``height``-tall row holding every glyph side-by-side;
   glyph *i* occupies columns ``[orig_x, orig_x + slot_w)``.  No Y-flip is
@@ -129,13 +132,14 @@ def extract_fonts(font_data: bytes, font_root: DirNode, output_dir: Path) -> lis
 
             atlas_leaf, metrics_leaf, cmap_leaf, big_leaf = leaves[:4]
 
-            # --- Atlas (bg6a header: 8 × int32, then a 516-byte sub-header,
+            # --- Atlas (bg6a header: 9 × int32, then a 512-byte sub-header,
             #     then width*height raw grayscale bytes at the END of the leaf) ---
             aoff = atlas_leaf.abs_off
             strip_w, row_h = struct.unpack_from("<ii", font_data, aoff + 16)
-            # Pixel payload sits at the end of the leaf, after the 32-byte
-            # header + a fixed 516-byte sub-header.  Anchor to the end so any
-            # trailing slack is ignored and the sub-header is skipped exactly.
+            # Pixel payload sits at the end of the leaf, after the 36-byte
+            # header + a fixed 512-byte sub-header (548 bytes total).  Anchor to
+            # the end so any trailing slack is ignored and the header/sub-header
+            # are skipped exactly.
             pix_base = aoff + atlas_leaf.size - strip_w * row_h
 
             # --- Metrics: 4 × int32 = (-ascender, -descender, max_adv, line_h) ---

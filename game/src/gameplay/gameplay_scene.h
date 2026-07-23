@@ -55,6 +55,7 @@ private:
     render::TerrainRenderer* active_terrain_renderer() const;
     void load_sprites();
     void render_decorations();
+    void render_bridges();
     void render_buildings();
     void toggle_build_menu();
     void render_dev_gui();
@@ -87,6 +88,7 @@ private:
 
     AnchoredSprite                         hq_sprite_;
     std::map<std::string, AnchoredSprite>  decoration_sprites_;
+    std::map<std::string, AnchoredSprite>  bridge_sprites_;  // "terrain.brid.<v>" / "terrain.rbrd.<v>"
 
     ui::UIManager                          ui_manager_;
     std::map<std::string, render::Texture> ui_textures_;

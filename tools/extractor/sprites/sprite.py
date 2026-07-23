@@ -1,8 +1,15 @@
 """Decoder for the "bg6a" sprite/bitmap leaf format used throughout
 `font.{}`, `bldg.{}`, `unit.{}`, `a_ui*`, `d_ui*`, `m_ui*`, and `flor.{}`.
 
-Leaf layout: a 32-byte header followed by `width * height * bpp` bytes of
-row-major pixel data (plus a 0-16 byte trailer that is ignored).
+Leaf layout: a 36-byte header (9 int32) followed by `width * height * bpp`
+bytes of row-major pixel data (plus a 0-12 byte trailer that is ignored).
+Pixel data starts at header offset +0x24 (36), just past a 9th header dword
+at +0x20 (which the engine reads only for odd-field3 formats -- likely a
+colorkey/palette value). Proved by EXE fcn 0x59f0e0 (the RGBA8888 surface
+ctor); see `documentation/03-exe-analysis.md` Round 44. An earlier revision
+started pixels at +0x20 (32) and compensated with a whole-buffer "rotate
+left by 4 bytes" hack; that hack (which corrupted the bottom-right corner)
+is now superseded by reading from the correct +0x24 offset.
 
 `bpp` (bytes per pixel) and the pixel format are NOT fully determined by the
 header alone -- see `decode_sprite` and `_pixel_format_from_str_rel` for the
@@ -22,7 +29,8 @@ from ..containers.container import ChildEntry, DirNode, read_record
 
 _HEADER_MAGIC = 0x61366762  # "bg6a", reversed-ASCII
 _HEADER_VERSION = 2
-_HEADER_SIZE = 32
+_HEADER_SIZE = 36  # 9 int32; pixel data starts here, past the 9th dword at +0x20
+_MAX_TRAILER = 12  # slack allowed after the pixel payload when inferring bpp
 
 _PALETTE_MAGIC = b"ap01"
 _PALETTE_SIZE = 1052
@@ -30,12 +38,6 @@ _PALETTE_HEADER_SIZE = 28
 _PALETTE_NUM_COLORS = 512
 
 _TRANSPARENT_KEY_RGB = (255, 0, 255)  # DirectDraw magenta colour-key
-
-# Every bg6a row is stored rotated left by this many BYTES (a surface-pitch
-# artifact): the leftmost _ROW_WRAP_BYTES of raw pixel data for a row actually
-# belong at the right edge of that row. 4 bytes = 4 px at 8bpp, 2 px at 16bpp,
-# 1 px at 32bpp. See _decode_raw().
-_ROW_WRAP_BYTES = 4
 
 
 @dataclass
@@ -55,13 +57,13 @@ def _decode_raw(blob: bytes) -> tuple[int, int, int, int, bytes, int, int, int] 
     Returns (width, height, anchor_x, anchor_y, pixels, field3, str_rel, bpp),
     or None if `blob` doesn't look like a sprite leaf. `bpp` is inferred by
     finding the byte width (1, 2, 3, or 4) for which the trailing slack
-    `len(blob) - 32 - width*height*bpp` falls in [0, 16]; `field3 == 1`
+    `len(blob) - 36 - width*height*bpp` falls in [0, 12]; `field3 == 1`
     forces bpp == 2 (16-bit direct colour).
 
-    Every row is stored rotated left by `_ROW_WRAP_BYTES` (4) bytes relative
-    to the displayed image (a surface-pitch artifact: 4 px at 8bpp, 2 px at
-    16bpp, 1 px at 32bpp), so `pixels` is un-rotated row-by-row before being
-    returned.
+    Pixel data starts at header offset +0x24 (36), past the 9th header dword
+    at +0x20 (see the module docstring). No rotation/un-shifting is applied --
+    the previous "rotate left by 4 bytes" hack was compensating for reading
+    from +0x20 instead of +0x24 and has been removed.
     """
     if len(blob) < _HEADER_SIZE:
         return None
@@ -79,7 +81,7 @@ def _decode_raw(blob: bytes) -> tuple[int, int, int, int, bytes, int, int, int] 
     bpp = None
     for candidate in candidate_bpps:
         trailer = len(blob) - _HEADER_SIZE - num_pixels * candidate
-        if 0 <= trailer <= 16:
+        if 0 <= trailer <= _MAX_TRAILER:
             bpp = candidate
             break
     if bpp is None:
@@ -87,20 +89,6 @@ def _decode_raw(blob: bytes) -> tuple[int, int, int, int, bytes, int, int, int] 
 
     pixel_bytes = num_pixels * bpp
     pixels = blob[_HEADER_SIZE:_HEADER_SIZE + pixel_bytes]
-
-    # The whole pixel block is stored rotated left by a fixed _ROW_WRAP_BYTES
-    # (4) — a surface-pitch artifact: the read started 4 bytes into the
-    # contiguous surface. Un-rotate the ENTIRE buffer as one stream, NOT each
-    # row independently. This matters only at the row boundary: a row's left
-    # edge and interior are identical either way, but the 4 wrapped bytes at a
-    # row's right edge belong to the *next* row's start, not its own. Doing it
-    # per-row pulls those bytes from the same row, leaving the rightmost column
-    # (4 px @8bpp, 2 px @16bpp, 1 px @32bpp) shifted DOWN by one row — visible
-    # as a glitched far-right column on narrow sprites like `stdc.vscr`. The
-    # final 4 bytes of the image wrap to the very top, which is correct for the
-    # contiguous read. (Negligible on wide sprites; most visible when narrow.)
-    if 0 < _ROW_WRAP_BYTES < pixel_bytes:
-        pixels = pixels[_ROW_WRAP_BYTES:] + pixels[:_ROW_WRAP_BYTES]
     return width, height, anchor_x, anchor_y, pixels, field3, str_rel, bpp
 
 

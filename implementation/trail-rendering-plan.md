@@ -457,8 +457,10 @@ now unblocked.  The LUT arrays can be copied directly from
 
 - **Bridge rendering** (`terr_brid_*`, `terr_rbrd_*`): bridges are sprites
   placed at specific waypoints, not tile overlays.  Separate feature — see
-  `bridge-plan.md` (canal sea-mouth decals + bridge decal suppression are
-  done; the sprite pass and construction auto-bridging remain).
+  `bridge-plan.md`.  **Now done**: canal sea-mouth decals, bridge decal
+  suppression, deck sprite extraction and the deck sprite pass
+  (`GameplayScene::render_bridges()`, WP4/WP5).  Construction
+  auto-bridging (WP3/WP6) remains.
 - **Canal water animation**: canal cells in the game animate.  Deferred until
   the animation system exists.
 - **Multi-network overlap on a single tile**: the current render call draws

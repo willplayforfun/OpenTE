@@ -159,8 +159,11 @@ struct TileConnectivity {
     uint8_t road   = 0;    // byte 1: road connections (per-direction upgrade over trail)
     uint8_t rail   = 0;    // byte 2: rail connections (cardinal-only, like trail/road)
     uint8_t canal  = 0;    // byte 3: canal connections (the only 8-directional network)
-    uint8_t bridge = 0xff; // byte 4: 0xff = no bridge; anything else marks a bridge tile
-    uint8_t bridge_aux = 0; // byte 5: second mapp.brid byte (semantics not yet decoded)
+    uint8_t bridge = 0xff; // byte 4: 0xff = no bridge; anything else marks a bridge tile AND is
+                           //         the crossing's averaged water DEPTH (= the deck's elevation,
+                           //         treated as an alti byte). 0 is a valid depth.
+    uint8_t bridge_aux = 0; // byte 5: the bridge's DIRECTION, `0x10 << cardinal_index`
+                           //         (0x10=N / 0x20=E / 0x40=S / 0x80=W)
 };
 ```
 
@@ -231,8 +234,11 @@ records, in this order:
    `bridge_aux = (flags>>8)&0xff`.
 
 A bridge tile (`bridge != 0xff`) suppresses the tile's network decal — the
-bridge visual is a separate sprite (see
-`OpenTE/implementation/bridge-plan.md`).
+bridge visual is a separate sprite pass, implemented in
+`GameplayScene::render_bridges()` (deck variant = the suppression value;
+deck elevation = byte 4's depth, so a span stays level). See
+[rendering.md](rendering.md) "Bridge decks" and
+`OpenTE/implementation/bridge-plan.md`.
 
 In the extracted `maps/<id>.json` this grid is stored as the `connectivity`
 field, RLE-compressed ("base64-rle6": `(6-byte tile, uint16 LE run length)`

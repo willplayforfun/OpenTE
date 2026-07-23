@@ -34,13 +34,20 @@ struct TileConnectivity {
                                 //         LUT code space with trail/road -> level-crossing cells)
     std::uint8_t canal  = 0;    // byte 3: canal connections (8-directional, see encoding above;
                                 //         canal endpoints at shore-water draw sea-mouth cells)
-    std::uint8_t bridge = 0xff; // byte 4: 0xff = no bridge; any other value marks a bridge tile,
-                                //         which SUPPRESSES the tile's network decal (the bridge
-                                //         visual is a separate sprite, not a Stage-D decal).
+    std::uint8_t bridge = 0xff; // byte 4: 0xff = no bridge; any other value marks a bridge tile
+                                //         AND is the crossing's DEPTH -- the averaged water
+                                //         depth/level, used as the deck's elevation (the EXE
+                                //         treats it exactly as an alti byte; see
+                                //         GameplayScene::render_bridges). It SUPPRESSES the
+                                //         tile's network decal: the bridge visual is a separate
+                                //         sprite pass, not a Stage-D decal. 0 is a valid depth.
                                 //         MUST default to 0xff -- a 0 default would flag every
                                 //         tile as a bridge and hide all trail/road/rail decals.
-    std::uint8_t bridge_aux = 0; // byte 5: second mapp.brid byte; feeds the same suppression
-                                 //         test as `bridge` (exact meaning not yet decoded)
+    std::uint8_t bridge_aux = 0; // byte 5: the bridge's DIRECTION, `0x10 << cardinal_index`
+                                 //         (0x10=N / 0x20=E / 0x40=S / 0x80=W; EXE table
+                                 //         0x5fea00). Added to pack4(dirs) to form the deck
+                                 //         sprite's variant id, and feeds the same suppression
+                                 //         test as `bridge`.
 };
 
 /// Small terrain-type enum (world-and-maps.md).

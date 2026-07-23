@@ -53,6 +53,7 @@ must stay at native resolution for that math to land correctly.
 """
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
 from ..containers.container import DirNode, find_child
@@ -161,6 +162,26 @@ _NETWORK_ATLAS_SUBTAGS: dict[str, dict[str, str]] = {
 _TRAN_DISSOLVE_THRESHOLD = 8
 
 _TERRAIN_TEXTURES_TABLE_PATH = Path("tables") / "terrain_textures.json"
+
+# Bridge sprite sets (bridge-plan WP2/WP4).  `terr/brid` = road/trail bridge
+# decks, `terr/rbrd` = rail bridge decks; both live directly under `terr/`
+# (shared across all cultures, like the shore atlases).  Each set holds 20
+# `bg6a` sprite leaves whose *container tag is a raw little-endian int32* equal
+# to the BridgeMarker variant id (CLAUDE.md gotcha 8), plus two `futx`/`futy`
+# int fields that are NOT sprites.  Variant id (EXE helper 0x54d530):
+#
+#     variant = pack4(dirs) + bridge_aux
+#     pack4   = (d&0x02?1) | (d&0x08?2) | (d&0x20?4) | (d&0x80?8)   # N,E,S,W
+#     aux     = mask byte 5  (0x10=N / 0x20=E / 0x40=S / 0x80=W)
+#
+# so the id ranges over 0x01..0xaa.  Sprite leaves carry the `bg6a`-leaf
+# container flag 0x61366720; the `futx`/`futy` fields (flag 0x41) and any
+# "+1 spillover" trailing header are filtered out by the flag + range checks.
+# See documentation/scripts/te_brid_variants.py and 03-exe-analysis.md Round 44.
+_BRIDGE_SETS = ("brid", "rbrd")
+_BRIDGE_SPRITE_FLAG = 0x61366720
+_BRIDGE_MAX_VARIANT = 0xAA  # highest valid variant id (double-aux N|E span)
+_BRIDGES_TABLE_PATH = Path("tables") / "bridges.json"
 
 
 def _apply_dissolve_mask(rgba: bytes, threshold: int = _TRAN_DISSOLVE_THRESHOLD) -> bytes:
@@ -325,5 +346,79 @@ def extract_terrain_textures_all_cultures(
             cultures_json[alias] = cultures_json[base]
 
     write_json(output_dir / _TERRAIN_TEXTURES_TABLE_PATH, {"cultures": cultures_json})
+
+    return all_entries
+
+
+def extract_bridge_sprites(
+    m_ui_data: bytes,
+    m_ui_root: DirNode,
+    output_dir: Path,
+) -> list[SpriteEntry]:
+    """Extracts the road/trail (`terr/brid`) and rail (`terr/rbrd`) bridge
+    deck sprite sets from `m_ui,u.{}`.
+
+    Writes one PNG per variant under `<output_dir>/sprites/terrain/` (ids
+    `terrain.brid.<variant>` / `terrain.rbrd.<variant>`, variant in decimal)
+    and a variant->sprite-id lookup table to
+    `<output_dir>/tables/bridges.json`:
+
+        {"sets": {"brid": {"<variant>": "terrain.brid.<variant>", ...},
+                  "rbrd": {"<variant>": "terrain.rbrd.<variant>", ...}}}
+
+    The game selects a deck sprite by (network is rail? -> rbrd : brid) and
+    the variant id computed from a bridge tile's connectivity mask (WP5).
+    Sprite anchor offsets (leaf off_x/off_y) ride along in each SpriteEntry.
+    Returns the SpriteEntry list for the manifest.
+    """
+    terr_entry = find_child(m_ui_root, "terr")
+    if terr_entry is None or terr_entry.dir is None:
+        return []
+    terr_root = terr_entry.dir
+
+    sprites_dir = output_dir / "sprites" / "terrain"
+    sprites_dir.mkdir(parents=True, exist_ok=True)
+
+    all_entries: list[SpriteEntry] = []
+    sets_json: dict[str, dict[str, str]] = {}
+
+    for setname in _BRIDGE_SETS:
+        set_entry = find_child(terr_root, setname)
+        if set_entry is None or set_entry.dir is None:
+            continue
+
+        variants: dict[str, str] = {}
+        for child in set_entry.dir.children:
+            if child.kind != "leaf" or child.flag != _BRIDGE_SPRITE_FLAG:
+                continue
+            tag_bytes = child.tag.encode("latin1", "replace")
+            if len(tag_bytes) != 4:
+                continue
+            variant = struct.unpack("<I", tag_bytes[::-1])[0]
+            if not (0 <= variant <= _BRIDGE_MAX_VARIANT):
+                continue
+
+            sprite = decode_sprite(m_ui_data, child.abs_off, child.size)
+            if sprite is None:
+                continue
+
+            sprite_id = f"terrain.{setname}.{variant}"
+            relative_path = Path("sprites") / "terrain" / f"{sprite_id}.png"
+            write_png_rgba(output_dir / relative_path, sprite.width, sprite.height, sprite.rgba)
+            all_entries.append(SpriteEntry(
+                id=sprite_id,
+                file=str(relative_path).replace("\\", "/"),
+                width=sprite.width,
+                height=sprite.height,
+                anchor_x=sprite.anchor_x,
+                anchor_y=sprite.anchor_y,
+            ))
+            variants[str(variant)] = sprite_id
+
+        sets_json[setname] = variants
+
+    table_path = output_dir / _BRIDGES_TABLE_PATH
+    table_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(table_path, {"sets": sets_json})
 
     return all_entries
